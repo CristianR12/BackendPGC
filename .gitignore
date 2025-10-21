@@ -1,0 +1,7 @@
+# Local Netlify folder
+.netlify
+# credenciales de firebase
+/CredencialesFirebase/
+asistenciaconreconocimiento-firebase-adminsdk.json
+
+.venv
