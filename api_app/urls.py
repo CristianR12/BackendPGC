@@ -5,9 +5,11 @@ from .views import (
     AsistenciaRetrieve,
     AsistenciaUpdate,
     AsistenciaDelete,
+    HealthCheck,
 )
 
 urlpatterns = [
+    path("health/", HealthCheck.as_view(), name="health-check"),
     path("asistencias/", AsistenciaList.as_view(), name="asistencia-list"),
     path("asistencias/crear/", AsistenciaCreate.as_view(), name="asistencia-create"),
     path("asistencias/<str:pk>/", AsistenciaRetrieve.as_view(), name="asistencia-detail"),

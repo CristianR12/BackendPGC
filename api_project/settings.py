@@ -1,13 +1,11 @@
 """
 Django settings for api_project project.
-
 Adaptado para trabajar con Firebase + Django REST Framework
 """
 
 from pathlib import Path
 import firebase_admin
 from firebase_admin import credentials
-
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -17,7 +15,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # -------------------------
 SECRET_KEY = 'django-insecure-)%(502kzlli4p-7cvm3eenaqtn&lrqc_k52)aef764gn$zx1wr'
 DEBUG = True
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ['*']  # Para desarrollo
 
 # -------------------------
 # Apps instaladas
@@ -29,8 +27,9 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    
+    # Terceros (corsheaders DEBE estar antes de tu app)
     'corsheaders',
-    # Terceros
     'rest_framework',
 
     # Tu app
@@ -39,25 +38,28 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
-    'corsheaders.middleware.CorsMiddleware',
+    'corsheaders.middleware.CorsMiddleware',  # ← DEBE estar AQUÍ (segundo)
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
-    
 ]
 
 ROOT_URLCONF = 'api_project.urls'
 
-CORS_ALLOW_ALL_ORIGINS=[
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
- ]
+# -------------------------
+# CONFIGURACIÓN DE CORS (CRÍTICO)
+# -------------------------
 
+# Permitir todos los orígenes (solo para desarrollo)
 CORS_ALLOW_ALL_ORIGINS = True
 
+# Permitir credenciales (cookies, auth headers)
+CORS_ALLOW_CREDENTIALS = True
+
+# Headers permitidos
 CORS_ALLOW_HEADERS = [
     'accept',
     'accept-encoding',
@@ -70,6 +72,7 @@ CORS_ALLOW_HEADERS = [
     'x-requested-with',
 ]
 
+# Métodos HTTP permitidos
 CORS_ALLOW_METHODS = [
     'DELETE',
     'GET',
@@ -79,10 +82,13 @@ CORS_ALLOW_METHODS = [
     'PUT',
 ]
 
+# -------------------------
+# Templates
+# -------------------------
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [BASE_DIR / "templates"],  # soporte para HTML si usas vistas
+        'DIRS': [BASE_DIR / "templates"],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -102,8 +108,21 @@ WSGI_APPLICATION = 'api_project.wsgi.application'
 # -------------------------
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.dummy',  # no usamos ORM de Django
+        'ENGINE': 'django.db.backends.dummy',
     }
+}
+
+# -------------------------
+# REST Framework Configuration
+# -------------------------
+REST_FRAMEWORK = {
+    'DEFAULT_RENDERER_CLASSES': [
+        'rest_framework.renderers.JSONRenderer',
+        'rest_framework.renderers.BrowsableAPIRenderer',
+    ],
+    'DEFAULT_PARSER_CLASSES': [
+        'rest_framework.parsers.JSONParser',
+    ],
 }
 
 # -------------------------
@@ -130,8 +149,6 @@ USE_TZ = True
 STATIC_URL = 'static/'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
-
-CORS_ALLOW_ALL_ORIGINS = True 
 
 # -------------------------
 # Firebase Config
