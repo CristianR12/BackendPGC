@@ -1,24 +1,40 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework import status
+from rest_framework import status, permissions
 from firebase_admin import firestore
 from .serializers import AsistenciaSerializer, UserSerializer
+from firebase_admin.exceptions import FirebaseError
+from google.api_core.exceptions import PermissionDenied, NotFound
 import logging
 from datetime import datetime
+from .permissions import verificar_token
 
 # Configurar logger
 logger = logging.getLogger(__name__)
 db = firestore.client()
 
-# ============================================
-# LISTAR TODAS LAS ASISTENCIAS
-# ============================================
+# ----- MANEJO DE ERRORES FIREBASE ----
+def handle_firestore_error(e):
+    if isinstance(e, PermissionDenied):
+        return Response({"error": "Acceso denegado a Firestore"}, status=status.HTTP_403_FORBIDDEN)
+    elif isinstance(e, NotFound):
+        return Response({"error": "Documento no encontrado"}, status=status.HTTP_404_NOT_FOUND)
+    elif isinstance(e, FirebaseError):
+        return Response({"error": "Error interno del servicio Firebase"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    else:
+        return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+# ----- LISTAR TODAS -----
 class AsistenciaList(APIView):
     """
     GET /api/asistencias/
     Lista todas las asistencias registradas
     """
     def get(self, request):
+        token_error = verificar_token(request)
+        if token_error:
+            return token_error  # Devuelve el Response con el error 401/403
+
         try:
             logger.info("=" * 60)
             logger.info("📥 [GET] /api/asistencias/ - Petición recibida")
@@ -75,6 +91,10 @@ class AsistenciaCreate(APIView):
     Crea una nueva asistencia
     """
     def post(self, request):
+        token_error = verificar_token(request)
+        if token_error:
+            return token_error  # Devuelve el Response con el error 401/403
+
         try:
             logger.info("=" * 60)
             logger.info("📥 [POST] /api/asistencias/crear/ - Petición recibida")
@@ -139,6 +159,10 @@ class AsistenciaRetrieve(APIView):
     Obtiene los detalles de una asistencia específica
     """
     def get(self, request, pk):
+        token_error = verificar_token(request)
+        if token_error:
+            return token_error  # Devuelve el Response con el error 401/403
+
         try:
             logger.info("=" * 60)
             logger.info(f"📥 [GET] /api/asistencias/{pk}/ - Petición recibida")
@@ -184,6 +208,10 @@ class AsistenciaUpdate(APIView):
     Actualiza una asistencia existente
     """
     def put(self, request, pk):
+        token_error = verificar_token(request)
+        if token_error:
+            return token_error  # Devuelve el Response con el error 401/403
+
         try:
             logger.info("=" * 60)
             logger.info(f"📥 [PUT] /api/asistencias/{pk}/update/ - Petición recibida")
@@ -246,6 +274,10 @@ class AsistenciaDelete(APIView):
     Elimina una asistencia
     """
     def delete(self, request, pk):
+        token_error = verificar_token(request)
+        if token_error:
+            return token_error  # Devuelve el Response con el error 401/403
+
         try:
             logger.info("=" * 60)
             logger.info(f"📥 [DELETE] /api/asistencias/{pk}/delete/ - Petición recibida")
@@ -305,7 +337,10 @@ class HealthCheck(APIView):
     """
     def get(self, request):
         logger.info("💚 [HEALTH CHECK] Servidor funcionando correctamente")
-        
+        token_error = verificar_token(request)
+        if token_error:
+            return token_error  # Devuelve el Response con el error 401/403
+
         # Verificar conexión a Firebase
         try:
             # Intentar leer la colección
