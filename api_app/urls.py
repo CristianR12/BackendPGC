@@ -1,3 +1,4 @@
+# src/api_app/urls.py - URLS COMPLETAS Y MEJORADAS
 from django.urls import path
 from .views import (
     # Asistencias
@@ -10,6 +11,8 @@ from .views import (
     HorarioProfesorView,
     HorarioCursoView,
     HorarioClaseView,
+    ObtenerEstudiantesView,
+    ConflictosHorarioView,
     # Health Check
     HealthCheck,
 )
@@ -30,24 +33,33 @@ urlpatterns = [
     path("asistencias/<str:pk>/delete/", AsistenciaDelete.as_view(), name="asistencia-delete"),
     
     # ============================================
-    # HORARIOS (Nuevos endpoints)
+    # HORARIOS (Endpoints completos y mejorados)
     # ============================================
     
-    # Gestión de horario del profesor
-    # GET: Obtener todos los cursos del profesor autenticado
+    # -------- GESTIÓN DE HORARIO DEL PROFESOR --------
+    # Obtener todos los cursos del profesor
     # POST: Crear/actualizar horario completo
     # DELETE: Eliminar todo el horario
     path("horarios/", HorarioProfesorView.as_view(), name="horario-profesor"),
     
-    # Gestión de curso específico
-    # GET: Obtener detalles de un curso
+    # -------- GESTIÓN DE CURSO ESPECÍFICO --------
+    # Obtener detalles de un curso
     # PUT: Actualizar el schedule de un curso
+    # DELETE: Eliminar un curso completo
     path("horarios/cursos/<str:course_id>/", HorarioCursoView.as_view(), name="horario-curso"),
     
-    # Gestión de clases individuales
+    # -------- GESTIÓN DE CLASES INDIVIDUALES --------
     # POST: Agregar una clase al horario de un curso
-    path("horarios/clases/", HorarioClaseView.as_view(), name="horario-clase-create"),
-    
+    # PUT: Actualizar una clase específica
     # DELETE: Eliminar una clase específica
-    path("horarios/clases/<str:clase_id>/", HorarioClaseView.as_view(), name="horario-clase-delete"),
+    path("horarios/clases/", HorarioClaseView.as_view(), name="horario-clase-create"),
+    path("horarios/clases/<str:clase_id>/", HorarioClaseView.as_view(), name="horario-clase-detail"),
+    
+    # -------- GESTIÓN DE ESTUDIANTES --------
+    # Obtener lista de estudiantes de un curso
+    path("horarios/cursos/<str:course_id>/estudiantes/", ObtenerEstudiantesView.as_view(), name="horario-estudiantes"),
+    
+    # -------- VALIDACIONES --------
+    # Validar conflictos de horario sin guardar
+    path("horarios/validar-conflictos/", ConflictosHorarioView.as_view(), name="validar-conflictos"),
 ]
