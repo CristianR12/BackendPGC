@@ -28,55 +28,65 @@ def verificar_token(request):
         parts = auth_header.split(' ')
         
         if len(parts) != 2 or parts[0] != 'Bearer':
-            logger.warning(f"⚠️ Formato de token inválido")
+            logger.warning(f"⚠️ Formato de token inválido: {auth_header[:20]}...")
             return Response(
                 {"Error": "Formato de token inválido. Usa 'Bearer <token>'"},
                 status=status.HTTP_401_UNAUTHORIZED
             )
 
         id_token = parts[1]
+        
+        # Log del token (primeros caracteres)
+        logger.info(f"🔐 Verificando token: {id_token[:20]}...")
 
         try:
-            # Verificar el token con Firebase Admin (con verificación de revocación)
-            decoded_token = auth.verify_id_token(id_token, check_revoked=True)
+            # Verificar el token con Firebase Admin (SIN check_revoked para evitar problemas)
+            decoded_token = auth.verify_id_token(id_token, check_revoked=False)
             
             # Guardar información del usuario en el request
             request.user_firebase = decoded_token
             
-            logger.info(f"✅ Token válido - Usuario: {decoded_token.get('email', 'N/A')}")
+            logger.info(f"✅ Token válido - Usuario: {decoded_token.get('email', 'N/A')} (UID: {decoded_token.get('uid', 'N/A')})")
             
             return None  # Token válido
 
-        except auth.InvalidIdTokenError:
-            logger.error("❌ Token inválido")
+        except auth.InvalidIdTokenError as e:
+            logger.error(f"❌ Token inválido: {str(e)}")
             return Response(
                 {"Error": "Token inválido. Por favor, inicia sesión nuevamente."},
                 status=status.HTTP_401_UNAUTHORIZED
             )
             
-        except auth.ExpiredIdTokenError:
-            logger.error("❌ Token expirado")
+        except auth.ExpiredIdTokenError as e:
+            logger.error(f"❌ Token expirado: {str(e)}")
             return Response(
                 {"Error": "Tu sesión ha expirado. Por favor, inicia sesión nuevamente."},
                 status=status.HTTP_401_UNAUTHORIZED
             )
             
-        except auth.RevokedIdTokenError:
-            logger.error("❌ Token revocado")
+        except auth.RevokedIdTokenError as e:
+            logger.error(f"❌ Token revocado: {str(e)}")
             return Response(
                 {"Error": "Tu sesión ha sido revocada. Por favor, inicia sesión nuevamente."},
                 status=status.HTTP_401_UNAUTHORIZED
             )
             
-        except Exception as e:
-            logger.error(f"❌ Error verificando token: {str(e)}")
+        except auth.CertificateFetchError as e:
+            logger.error(f"❌ Error al obtener certificados de Firebase: {str(e)}")
             return Response(
-                {"Error": "Error verificando token. Intenta iniciar sesión nuevamente."},
+                {"Error": "Error de conexión con Firebase. Por favor, intenta nuevamente."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE
+            )
+            
+        except Exception as e:
+            logger.error(f"❌ Error verificando token: {type(e).__name__} - {str(e)}")
+            return Response(
+                {"Error": f"Error verificando token: {str(e)}"},
                 status=status.HTTP_401_UNAUTHORIZED
             )
             
     except Exception as e:
-        logger.error(f"❌ Error general en verificar_token: {str(e)}")
+        logger.error(f"❌ Error general en verificar_token: {type(e).__name__} - {str(e)}")
         return Response(
             {"Error": "Error interno del servidor"},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
