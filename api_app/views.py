@@ -74,6 +74,33 @@ def buscar_persona_por_uid(uid):
         logger.error(traceback.format_exc())
         return None
 
+def buscar_nombre_estudiante(cedula):
+    """
+    Busca el nombre de un estudiante por su cédula en la colección 'person'.
+
+    Args:
+        cedula (str): Cédula del estudiante
+        
+    Returns:
+        str: Nombre del estudiante o texto genérico si no se encuentra
+    """
+    try:
+        doc_ref = db.collection('person').document(str(cedula))
+        doc = doc_ref.get()
+
+        if doc.exists:
+            person_data = doc.to_dict()
+            nombre = person_data.get('namePerson', f"Estudiante {cedula}")
+            print(f"✅ Nombre encontrado para {cedula}: {nombre}")
+            return nombre
+        else:
+            print(f"⚠️ No se encontró documento para cédula: {cedula}")
+            return f"Estudiante {cedula}"
+
+    except Exception as e:
+        print(f"❌ Error al buscar nombre de estudiante: {str(e)}")
+        return f"Estudiante {cedula}"
+
 
 # ============================================
 # FUNCIÓN PARA OBTENER CURSOS DEL PROFESOR
@@ -296,7 +323,7 @@ def obtener_asistencias_curso(course_id, course_data, course_name):
                         # Crear objeto de asistencia con información del grupo
                         asistencia = {
                             'id': f"{course_id}_{group_id}_{fecha_id}_{cedula}",
-                            'estudiante': cedula,
+                            'estudiante': buscar_nombre_estudiante(cedula),
                             'asignatura': f"{course_name} - Grupo {group_name}",
                             'fechaYhora': fecha_id,
                             'estadoAsistencia': estudiante_data.get('estadoAsistencia', 'Presente'),
@@ -331,7 +358,7 @@ def obtener_asistencias_curso(course_id, course_data, course_name):
                     
                     asistencia = {
                         'id': f"{course_id}_{fecha_id}_{cedula}",
-                        'estudiante': cedula,
+                        'estudiante': buscar_nombre_estudiante(cedula),
                         'asignatura': course_name,
                         'fechaYhora': fecha_id,
                         'estadoAsistencia': estudiante_data.get('estadoAsistencia', 'Presente'),
