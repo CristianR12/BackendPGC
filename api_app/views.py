@@ -51,7 +51,7 @@ def buscar_persona_por_uid(uid):
         
         # Query a la colección 'person' buscando por el campo 'profesorUID'
         persons_ref = db.collection('person')
-        query = persons_ref.where('profesorUID', '==', uid).limit(1)
+        query = persons_ref.where(filter=firestore.FieldFilter('profesorUID', '==', uid)).limit(1)
         docs = list(query.stream())
         
         if not docs:
@@ -64,11 +64,188 @@ def buscar_persona_por_uid(uid):
         person_data['id'] = person_doc.id  # Agregar el ID del documento
         
         logger.info(f"✅ Persona encontrada: {person_data.get('namePerson', 'Sin nombre')} (DocID: {person_doc.id})")
+        logger.info(f"📚 Cursos en person: {person_data.get('courses', [])}")
+        
         return person_data
         
     except Exception as e:
         logger.error(f"❌ Error al buscar persona por UID: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
         return None
+
+
+# ============================================
+# FUNCIÓN PARA OBTENER CURSOS DEL PROFESOR
+# ============================================
+def obtener_cursos_profesor(person_data, user_uid):
+    """
+    Obtiene los cursos de un profesor buscando en:
+    1. person->courses (array con IDs de cursos)
+    2. courses->profesorID (coincide con UID)
+    3. courses->groups->profesorID (coincide con UID)
+    
+    Args:
+        person_data: Datos del documento person
+        user_uid: UID del usuario
+        
+    Returns:
+        list: Lista de cursos encontrados
+    """
+    cursos = []
+    course_ids_found = set()  # Para evitar duplicados
+    
+    try:
+        # ============================================
+        # MÉTODO 1: Obtener cursos desde person->courses
+        # ============================================
+        courses_array = person_data.get('courses', [])
+        logger.info(f"📋 Método 1: Buscando {len(courses_array)} cursos desde person->courses")
+        
+        for course_id in courses_array:
+            try:
+                course_ref = db.collection("courses").document(course_id)
+                course_doc = course_ref.get()
+                
+                if course_doc.exists:
+                    curso_data = course_doc.to_dict()
+                    curso_data['id'] = course_doc.id
+                    
+                    # Verificar que no sea duplicado
+                    if course_doc.id not in course_ids_found:
+                        cursos.append(curso_data)
+                        course_ids_found.add(course_doc.id)
+                        logger.info(f"   ✅ Curso encontrado: {curso_data.get('nameCourse')} (ID: {course_doc.id})")
+                else:
+                    logger.warning(f"   ⚠️ Curso {course_id} no existe en Firestore")
+                    
+            except Exception as e:
+                logger.error(f"   ❌ Error al obtener curso {course_id}: {str(e)}")
+        
+        # ============================================
+        # MÉTODO 2: Buscar en courses donde profesorID == user_uid
+        # ============================================
+        logger.info(f"📋 Método 2: Buscando cursos donde profesorID == {user_uid}")
+        
+        courses_ref = db.collection("courses")
+        query = courses_ref.where(filter=firestore.FieldFilter('profesorID', '==', user_uid))
+        docs = query.stream()
+        
+        for doc in docs:
+            if doc.id not in course_ids_found:
+                curso_data = doc.to_dict()
+                curso_data['id'] = doc.id
+                cursos.append(curso_data)
+                course_ids_found.add(doc.id)
+                logger.info(f"   ✅ Curso encontrado: {curso_data.get('nameCourse')} (ID: {doc.id})")
+        
+        # ============================================
+        # MÉTODO 3: Buscar en courses->groups donde profesorID == user_uid
+        # ============================================
+        logger.info(f"📋 Método 3: Buscando en groups donde profesorID == {user_uid}")
+        
+        all_courses = db.collection("courses").stream()
+        
+        for course_doc in all_courses:
+            course_id = course_doc.id
+            
+            # Ya lo tenemos? Saltar
+            if course_id in course_ids_found:
+                continue
+            
+            # Buscar en subcolección groups
+            groups_ref = db.collection("courses").document(course_id).collection("groups")
+            group_query = groups_ref.where(filter=firestore.FieldFilter('profesorID', '==', user_uid))
+            group_docs = list(group_query.stream())
+            
+            if group_docs:
+                # Encontramos al menos un grupo con este profesor
+                curso_data = course_doc.to_dict()
+                curso_data['id'] = course_id
+                cursos.append(curso_data)
+                course_ids_found.add(course_id)
+                logger.info(f"   ✅ Curso encontrado en groups: {curso_data.get('nameCourse')} (ID: {course_id})")
+        
+        logger.info(f"📊 Total de cursos encontrados: {len(cursos)}")
+        
+    except Exception as e:
+        logger.error(f"❌ Error al obtener cursos del profesor: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
+    
+    return cursos
+
+
+# ============================================
+# FUNCIÓN PARA OBTENER CURSOS DEL ESTUDIANTE
+# ============================================
+def obtener_cursos_estudiante(person_data, user_uid):
+    """
+    Obtiene los cursos de un estudiante buscando en:
+    1. person->courses (array con IDs de cursos)
+    2. courses->estudianteID (array que contiene el UID)
+    
+    Args:
+        person_data: Datos del documento person
+        user_uid: UID del usuario
+        
+    Returns:
+        list: Lista de cursos encontrados
+    """
+    cursos = []
+    course_ids_found = set()
+    
+    try:
+        # ============================================
+        # MÉTODO 1: Obtener cursos desde person->courses
+        # ============================================
+        courses_array = person_data.get('courses', [])
+        logger.info(f"📋 Método 1: Buscando {len(courses_array)} cursos desde person->courses")
+        
+        for course_id in courses_array:
+            try:
+                course_ref = db.collection("courses").document(course_id)
+                course_doc = course_ref.get()
+                
+                if course_doc.exists:
+                    curso_data = course_doc.to_dict()
+                    curso_data['id'] = course_doc.id
+                    
+                    if course_doc.id not in course_ids_found:
+                        cursos.append(curso_data)
+                        course_ids_found.add(course_doc.id)
+                        logger.info(f"   ✅ Curso encontrado: {curso_data.get('nameCourse')} (ID: {course_doc.id})")
+                else:
+                    logger.warning(f"   ⚠️ Curso {course_id} no existe en Firestore")
+                    
+            except Exception as e:
+                logger.error(f"   ❌ Error al obtener curso {course_id}: {str(e)}")
+        
+        # ============================================
+        # MÉTODO 2: Buscar en courses donde estudianteID contiene user_uid
+        # ============================================
+        logger.info(f"📋 Método 2: Buscando cursos donde estudianteID contiene {user_uid}")
+        
+        courses_ref = db.collection("courses")
+        query = courses_ref.where(filter=firestore.FieldFilter('estudianteID', 'array_contains', user_uid))
+        docs = query.stream()
+        
+        for doc in docs:
+            if doc.id not in course_ids_found:
+                curso_data = doc.to_dict()
+                curso_data['id'] = doc.id
+                cursos.append(curso_data)
+                course_ids_found.add(doc.id)
+                logger.info(f"   ✅ Curso encontrado: {curso_data.get('nameCourse')} (ID: {doc.id})")
+        
+        logger.info(f"📊 Total de cursos encontrados: {len(cursos)}")
+        
+    except Exception as e:
+        logger.error(f"❌ Error al obtener cursos del estudiante: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
+    
+    return cursos
 
 
 # ============================================
@@ -172,16 +349,15 @@ def obtener_asistencias_curso(course_id, course_data, course_name):
 
 
 # ============================================
-# ASISTENCIAS - MODIFICADO PARA AMBAS ESTRUCTURAS
+# ASISTENCIAS - MODIFICADO PARA FILTRAR POR PROFESOR
 # ============================================
 
 class AsistenciaList(APIView):
     """
     GET /api/asistencias/
-    Lista TODAS las asistencias de TODOS los cursos
-    Maneja ambas estructuras:
-    - courses/{courseId}/assistances/{fecha}
-    - courses/{courseId}/groups/{groupId}/assistances/{fecha}
+    Lista las asistencias filtradas según el usuario:
+    - Profesor: Solo asistencias de SUS cursos
+    - Estudiante: Solo asistencias de SUS cursos
     """
     def get(self, request):
         token_error = verificar_token(request)
@@ -190,29 +366,60 @@ class AsistenciaList(APIView):
 
         try:
             logger.info("=" * 60)
-            logger.info("📥 [GET] /api/asistencias/ - Obtener TODAS las asistencias")
+            logger.info("📥 [GET] /api/asistencias/ - Obtener asistencias filtradas")
             
+            # Obtener UID del usuario autenticado
+            user_uid = request.user_firebase.get('uid')
+            user_email = request.user_firebase.get('email', 'N/A')
+            logger.info(f"👤 Usuario UID: {user_uid}")
+            logger.info(f"📧 Email: {user_email}")
+            
+            # Buscar información del usuario en la colección 'person'
+            person_data = buscar_persona_por_uid(user_uid)
+            
+            if not person_data:
+                logger.warning(f"⚠️ Usuario {user_uid} no encontrado en 'person'")
+                return Response({
+                    "message": "Usuario no registrado en el sistema",
+                    "asistencias": []
+                }, status=status.HTTP_200_OK)
+            
+            user_type = person_data.get('type', '')
+            user_name = person_data.get('namePerson', 'Usuario')
+            logger.info(f"✅ Usuario encontrado: {user_name} - Tipo: {user_type}")
+            
+            # ============================================
+            # OBTENER CURSOS SEGÚN EL TIPO DE USUARIO
+            # ============================================
+            if user_type == 'Profesor':
+                logger.info(f"👨‍🏫 Obteniendo cursos del profesor {user_name}")
+                cursos_usuario = obtener_cursos_profesor(person_data, user_uid)
+            elif user_type == 'Estudiante':
+                logger.info(f"👨‍🎓 Obteniendo cursos del estudiante {user_name}")
+                cursos_usuario = obtener_cursos_estudiante(person_data, user_uid)
+            else:
+                logger.warning(f"⚠️ Tipo de usuario no reconocido: {user_type}")
+                return Response({
+                    "error": f"Tipo de usuario no válido: {user_type}",
+                    "asistencias": []
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # ============================================
+            # OBTENER ASISTENCIAS DE LOS CURSOS
+            # ============================================
             asistencias_list = []
             
-            # Obtener todos los cursos
-            courses_ref = db.collection("courses")
-            all_courses = courses_ref.stream()
-            
-            cursos_procesados = 0
-            
-            for course in all_courses:
-                course_id = course.id
-                course_data = course.to_dict()
-                course_name = course_data.get('nameCourse', 'Sin nombre')
+            for curso in cursos_usuario:
+                course_id = curso['id']
+                course_name = curso.get('nameCourse', 'Sin nombre')
                 
                 logger.info(f"📚 Procesando curso: {course_name} (ID: {course_id})")
-                cursos_procesados += 1
                 
                 # Usar función auxiliar para obtener asistencias
-                asistencias_curso = obtener_asistencias_curso(course_id, course_data, course_name)
+                asistencias_curso = obtener_asistencias_curso(course_id, curso, course_name)
                 asistencias_list.extend(asistencias_curso)
             
-            logger.info(f"✅ [SUCCESS] Total cursos procesados: {cursos_procesados}")
+            logger.info(f"✅ [SUCCESS] Total cursos del usuario: {len(cursos_usuario)}")
             logger.info(f"✅ [SUCCESS] Total asistencias encontradas: {len(asistencias_list)}")
             logger.info("=" * 60)
             
@@ -255,7 +462,7 @@ class AsistenciaCreate(APIView):
             
             # Buscar el curso por nombre
             courses_ref = db.collection("courses")
-            course_query = courses_ref.where("nameCourse", "==", asignatura).limit(1).stream()
+            course_query = courses_ref.where(filter=firestore.FieldFilter("nameCourse", "==", asignatura)).limit(1).stream()
             
             course_doc = None
             for doc in course_query:
@@ -329,9 +536,6 @@ class AsistenciaRetrieve(APIView):
     """
     GET /api/asistencias/<id>/
     Obtiene una asistencia específica
-    ID puede ser:
-    - courseId_fechaId_cedula (sin grupos)
-    - courseId_groupId_fechaId_cedula (con grupos)
     """
     def get(self, request, pk):
         token_error = verificar_token(request)
@@ -343,17 +547,10 @@ class AsistenciaRetrieve(APIView):
             
             # Determinar si tiene grupos según el número de partes
             if len(parts) == 4:
-                # Con grupos: courseId_groupId_fechaId_cedula
-                course_id = parts[0]
-                group_id = parts[1]
-                fecha_id = parts[2]
-                cedula = parts[3]
+                course_id, group_id, fecha_id, cedula = parts
                 has_groups = True
             elif len(parts) == 3:
-                # Sin grupos: courseId_fechaId_cedula
-                course_id = parts[0]
-                fecha_id = parts[1]
-                cedula = parts[2]
+                course_id, fecha_id, cedula = parts
                 group_id = None
                 has_groups = False
             else:
@@ -432,7 +629,6 @@ class AsistenciaUpdate(APIView):
         try:
             parts = pk.split('_')
             
-            # Determinar estructura
             if len(parts) == 4:
                 course_id, group_id, fecha_id, cedula = parts
                 has_groups = True
@@ -446,7 +642,6 @@ class AsistenciaUpdate(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
-            # Referencia al documento
             if has_groups:
                 assistance_ref = (db.collection("courses")
                                 .document(course_id)
@@ -476,7 +671,6 @@ class AsistenciaUpdate(APIView):
                     status=status.HTTP_404_NOT_FOUND
                 )
             
-            # Actualizar datos
             estudiante_data = assistance_data[cedula]
             
             if 'estadoAsistencia' in request.data:
@@ -486,7 +680,6 @@ class AsistenciaUpdate(APIView):
                 cedula: estudiante_data
             })
             
-            # Obtener nombre del curso
             course_doc = db.collection("courses").document(course_id).get()
             course_name = course_doc.to_dict().get('nameCourse', 'Sin nombre') if course_doc.exists else 'Sin nombre'
             
@@ -523,7 +716,6 @@ class AsistenciaDelete(APIView):
         try:
             parts = pk.split('_')
             
-            # Determinar estructura
             if len(parts) == 4:
                 course_id, group_id, fecha_id, cedula = parts
                 has_groups = True
@@ -537,7 +729,6 @@ class AsistenciaDelete(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
-            # Referencia al documento
             if has_groups:
                 assistance_ref = (db.collection("courses")
                                 .document(course_id)
@@ -567,7 +758,6 @@ class AsistenciaDelete(APIView):
                     status=status.HTTP_404_NOT_FOUND
                 )
             
-            # Eliminar el campo del estudiante
             assistance_ref.update({
                 cedula: firestore.DELETE_FIELD
             })
@@ -585,32 +775,27 @@ class AsistenciaDelete(APIView):
 
 
 # ============================================
-# HORARIOS - ENDPOINTS EXISTENTES (MODIFICADOS)
+# HORARIOS - MODIFICADO PARA USAR ARRAY courses
 # ============================================
 
 class HorarioProfesorView(APIView):
     """
     GET /api/horarios/
-    Obtiene todos los cursos del profesor autenticado
-    
-    POST /api/horarios/
-    Crea o actualiza el horario completo del profesor
+    Obtiene todos los cursos del profesor o estudiante autenticado
     """
     
     def get(self, request):
-        """Obtener todos los cursos del profesor"""
         token_error = verificar_token(request)
         if token_error:
             return token_error
 
         try:
             logger.info("=" * 60)
-            logger.info("📅 [GET] /api/horarios/ - Obtener horario del profesor")
+            logger.info("📅 [GET] /api/horarios/ - Obtener horario del usuario")
             
             user_uid = request.user_firebase.get('uid')
             logger.info(f"👤 Usuario UID: {user_uid}")
             
-            # 🔥 BUSCAR PERSONA POR UID (no por ID de documento)
             person_data = buscar_persona_por_uid(user_uid)
             
             if not person_data:
@@ -622,40 +807,19 @@ class HorarioProfesorView(APIView):
                     "message": "Usuario no registrado en el sistema"
                 }, status=status.HTTP_404_NOT_FOUND)
             
-            # Verificar tipo de usuario
             user_type = person_data.get('type', '')
+            user_name = person_data.get('namePerson', 'Usuario')
             logger.info(f"👤 Tipo de usuario: {user_type}")
             
+            # ============================================
+            # OBTENER CURSOS SEGÚN EL TIPO DE USUARIO
+            # ============================================
             if user_type == 'Profesor':
-                # PROFESOR: Buscar cursos donde profesorID == UID
-                courses_ref = db.collection("courses")
-                query = courses_ref.where("profesorID", "==", user_uid)
-                docs = query.stream()
-                
-                cursos = []
-                for doc in docs:
-                    curso_data = doc.to_dict()
-                    curso_data['id'] = doc.id
-                    cursos.append(curso_data)
-                    logger.info(f"   📚 Curso encontrado: {curso_data.get('nameCourse')}")
-                
-                logger.info(f"✅ Total cursos del profesor: {len(cursos)}")
-                
+                logger.info(f"👨‍🏫 Obteniendo cursos del profesor {user_name}")
+                cursos = obtener_cursos_profesor(person_data, user_uid)
             elif user_type == 'Estudiante':
-                # ESTUDIANTE: Buscar cursos donde estudianteID contiene el UID
-                courses_ref = db.collection("courses")
-                query = courses_ref.where("estudianteID", "array_contains", user_uid)
-                docs = query.stream()
-                
-                cursos = []
-                for doc in docs:
-                    curso_data = doc.to_dict()
-                    curso_data['id'] = doc.id
-                    cursos.append(curso_data)
-                    logger.info(f"   📚 Curso encontrado: {curso_data.get('nameCourse')}")
-                
-                logger.info(f"✅ Total cursos del estudiante: {len(cursos)}")
-                
+                logger.info(f"👨‍🎓 Obteniendo cursos del estudiante {user_name}")
+                cursos = obtener_cursos_estudiante(person_data, user_uid)
             else:
                 logger.warning(f"⚠️ Tipo de usuario no reconocido: {user_type}")
                 return Response({
@@ -663,6 +827,7 @@ class HorarioProfesorView(APIView):
                     "clases": []
                 }, status=status.HTTP_400_BAD_REQUEST)
             
+            logger.info(f"✅ Total cursos del usuario: {len(cursos)}")
             logger.info("=" * 60)
             
             return Response({
@@ -690,10 +855,8 @@ class HorarioProfesorView(APIView):
         try:
             logger.info("=" * 60)
             logger.info("📅 [POST] /api/horarios/ - Crear/Actualizar horario")
-            logger.info(f"📦 Datos recibidos: {request.data}")
             
             user_uid = request.user_firebase.get('uid')
-            
             clases = request.data.get('clases', [])
             
             if not clases:
@@ -747,9 +910,8 @@ class HorarioProfesorView(APIView):
             logger.info("🗑️ [DELETE] /api/horarios/ - Eliminar horario completo")
             
             user_uid = request.user_firebase.get('uid')
-            
             courses_ref = db.collection("courses")
-            query = courses_ref.where("profesorID", "==", user_uid)
+            query = courses_ref.where(filter=firestore.FieldFilter('profesorID', '==', user_uid))
             docs = query.stream()
             
             deleted_count = 0
@@ -771,15 +933,14 @@ class HorarioProfesorView(APIView):
 
 class HorarioCursoView(APIView):
     """
-    PUT /api/horarios/cursos/<course_id>/
-    Actualiza el horario (schedule) de un curso específico
-    
     GET /api/horarios/cursos/<course_id>/
     Obtiene los detalles de un curso específico
+    
+    PUT /api/horarios/cursos/<course_id>/
+    Actualiza el horario (schedule) de un curso específico
     """
     
     def get(self, request, course_id):
-        """Obtener detalles de un curso"""
         token_error = verificar_token(request)
         if token_error:
             return token_error
@@ -803,7 +964,6 @@ class HorarioCursoView(APIView):
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
     def put(self, request, course_id):
-        """Actualizar el horario de un curso"""
         token_error = verificar_token(request)
         if token_error:
             return token_error
@@ -848,12 +1008,14 @@ class HorarioClaseView(APIView):
     POST /api/horarios/clases/
     Agrega una clase al horario de un curso
     
-    DELETE /api/horarios/clases/<clase_id>/
+    PUT /api/horarios/clases/
+    Actualiza una clase específica
+    
+    DELETE /api/horarios/clases/
     Elimina una clase específica del horario
     """
     
     def post(self, request):
-        """Agregar una clase a un curso"""
         token_error = verificar_token(request)
         if token_error:
             return token_error
@@ -898,257 +1060,115 @@ class HorarioClaseView(APIView):
             logger.error(f"❌ Error: {str(e)}")
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
-    def delete(self, request, clase_id):
+    def put(self, request):
+        """Actualizar una clase específica"""
+        token_error = verificar_token(request)
+        if token_error:
+            return token_error
+
+        try:
+            logger.info("✏️ [PUT] /api/horarios/clases/ - Actualizar clase")
+            
+            course_id = request.data.get('courseId')
+            class_index = request.data.get('classIndex')
+            
+            if course_id is None or class_index is None:
+                return Response(
+                    {"error": "courseId y classIndex son requeridos"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            serializer = ScheduleClassSerializer(data=request.data)
+            if not serializer.is_valid():
+                return Response(
+                    {"error": "Datos inválidos", "details": serializer.errors},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            doc_ref = db.collection("courses").document(course_id)
+            doc = doc_ref.get()
+            
+            if not doc.exists:
+                return Response(
+                    {"error": "Curso no encontrado"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            curso_data = doc.to_dict()
+            schedule = curso_data.get('schedule', [])
+            
+            if class_index < 0 or class_index >= len(schedule):
+                return Response(
+                    {"error": "Índice de clase inválido"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            schedule[class_index] = serializer.validated_data
+            doc_ref.update({"schedule": schedule})
+            
+            logger.info(f"✅ Clase actualizada en curso {course_id}")
+            
+            return Response(serializer.validated_data, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            logger.error(f"❌ Error: {str(e)}")
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    
+    def delete(self, request):
         """Eliminar una clase específica"""
         token_error = verificar_token(request)
         if token_error:
             return token_error
 
         try:
-            logger.info(f"🗑️ [DELETE] /api/horarios/clases/{clase_id}/")
+            logger.info("🗑️ [DELETE] /api/horarios/clases/ - Eliminar clase")
             
-            return Response(
-                {"message": "Funcionalidad en desarrollo"},
-                status=status.HTTP_501_NOT_IMPLEMENTED
-            )
+            course_id = request.data.get('courseId')
+            class_index = request.data.get('classIndex')
             
-        except Exception as e:
-            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-
-# ============================================
-# HEALTH CHECK Y DEBUG
-# ============================================
-class DebugCursosView(APIView):
-    """
-    GET /api/debug/cursos/
-    Endpoint de prueba para ver todos los cursos y sus subcolecciones
-    """
-    def get(self, request):
-        try:
-            logger.info("🐛 [DEBUG] Verificando estructura de cursos")
+            if course_id is None or class_index is None:
+                return Response(
+                    {"error": "courseId y classIndex son requeridos"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
             
-            courses_ref = db.collection("courses")
-            all_courses = courses_ref.stream()
+            doc_ref = db.collection("courses").document(course_id)
+            doc = doc_ref.get()
             
-            cursos_info = []
+            if not doc.exists:
+                return Response(
+                    {"error": "Curso no encontrado"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
             
-            for course in all_courses:
-                course_id = course.id
-                course_data = course.to_dict()
-                
-                # Verificar estructura simple (assistances directas)
-                assistances_ref = db.collection("courses").document(course_id).collection("assistances")
-                assistances_count = len(list(assistances_ref.stream()))
-                
-                # Verificar estructura con grupos
-                groups_ref = db.collection("courses").document(course_id).collection("groups")
-                groups = list(groups_ref.stream())
-                
-                groups_info = []
-                total_assistances_groups = 0
-                
-                if groups:
-                    for group_doc in groups:
-                        group_id = group_doc.id
-                        group_data = group_doc.to_dict()
-                        
-                        # Contar asistencias del grupo
-                        group_assistances_ref = (db.collection("courses")
-                                                .document(course_id)
-                                                .collection("groups")
-                                                .document(group_id)
-                                                .collection("assistances"))
-                        group_assistances_count = len(list(group_assistances_ref.stream()))
-                        total_assistances_groups += group_assistances_count
-                        
-                        groups_info.append({
-                            "groupId": group_id,
-                            "groupName": group_data.get('group', group_id),
-                            "assistances": group_assistances_count
-                        })
-                
-                curso_info = {
-                    "id": course_id,
-                    "nameCourse": course_data.get("nameCourse", "Sin nombre"),
-                    "profesorID": course_data.get("profesorID", "N/A"),
-                    "estructura": "CON_GRUPOS" if groups else "SIMPLE",
-                    "assistances_directas": assistances_count,
-                    "grupos": groups_info,
-                    "total_assistances_grupos": total_assistances_groups
-                }
-                
-                cursos_info.append(curso_info)
-                
-                logger.info(f"📚 Curso: {curso_info['nameCourse']} - Estructura: {curso_info['estructura']}")
+            curso_data = doc.to_dict()
+            schedule = curso_data.get('schedule', [])
+            
+            if class_index < 0 or class_index >= len(schedule):
+                return Response(
+                    {"error": "Índice de clase inválido"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            deleted_class = schedule.pop(class_index)
+            doc_ref.update({"schedule": schedule})
+            
+            logger.info(f"✅ Clase eliminada del curso {course_id}")
             
             return Response({
-                "total_cursos": len(cursos_info),
-                "cursos": cursos_info
+                "success": True,
+                "message": "Clase eliminada correctamente",
+                "deleted_class": deleted_class
             }, status=status.HTTP_200_OK)
             
         except Exception as e:
             logger.error(f"❌ Error: {str(e)}")
-            import traceback
-            logger.error(traceback.format_exc())
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-class DebugAsistenciasPublicView(APIView):
-    """
-    GET /api/debug/asistencias/
-    Endpoint PÚBLICO temporal para verificar que se obtienen TODAS las asistencias
-    ⚠️ QUITAR EN PRODUCCIÓN
-    """
-    def get(self, request):
-        try:
-            logger.info("=" * 60)
-            logger.info("🐛 [DEBUG PUBLIC] Obtener TODAS las asistencias SIN autenticación")
-            
-            asistencias_list = []
-            
-            # Obtener todos los cursos
-            courses_ref = db.collection("courses")
-            all_courses = courses_ref.stream()
-            
-            cursos_procesados = 0
-            
-            for course in all_courses:
-                course_id = course.id
-                course_data = course.to_dict()
-                course_name = course_data.get('nameCourse', 'Sin nombre')
-                
-                logger.info(f"📚 Procesando curso: {course_name} (ID: {course_id})")
-                cursos_procesados += 1
-                
-                # Usar función auxiliar
-                asistencias_curso = obtener_asistencias_curso(course_id, course_data, course_name)
-                asistencias_list.extend(asistencias_curso)
-            
-            logger.info(f"✅ [SUCCESS] Total cursos procesados: {cursos_procesados}")
-            logger.info(f"✅ [SUCCESS] Total asistencias encontradas: {len(asistencias_list)}")
-            logger.info("=" * 60)
-            
-            return Response({
-                "total": len(asistencias_list),
-                "asistencias": asistencias_list
-            }, status=status.HTTP_200_OK)
-            
-        except Exception as e:
-            logger.error(f"❌ [ERROR] Error: {str(e)}")
-            import traceback
-            logger.error(traceback.format_exc())
-            return Response(
-                {"error": "Error al obtener asistencias", "detail": str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-
-
-class TestTokenView(APIView):
-    """
-    GET /api/test-token/
-    Endpoint de prueba para verificar el token de Firebase
-    ⚠️ TEMPORAL - Solo para debugging
-    """
-    def get(self, request):
-        try:
-            logger.info("🔐 [TEST TOKEN] Verificando token")
-            
-            # Obtener header de autorización
-            auth_header = request.headers.get('Authorization')
-            logger.info(f"📋 Authorization Header: {auth_header[:50] if auth_header else 'NO ENCONTRADO'}...")
-            
-            if not auth_header:
-                return Response({
-                    "error": "No authorization header",
-                    "headers_received": list(request.headers.keys())
-                }, status=status.HTTP_401_UNAUTHORIZED)
-            
-            # Verificar formato
-            parts = auth_header.split(' ')
-            logger.info(f"📋 Parts: {len(parts)}")
-            
-            if len(parts) != 2 or parts[0] != 'Bearer':
-                return Response({
-                    "error": "Invalid format",
-                    "expected": "Bearer <token>",
-                    "received": auth_header[:50]
-                }, status=status.HTTP_401_UNAUTHORIZED)
-            
-            id_token = parts[1]
-            logger.info(f"📋 Token length: {len(id_token)}")
-            logger.info(f"📋 Token first 20 chars: {id_token[:20]}")
-            
-            # Intentar verificar con Firebase Admin
-            from firebase_admin import auth as firebase_auth
-            
-            try:
-                decoded_token = firebase_auth.verify_id_token(id_token, check_revoked=True)
-                logger.info(f"✅ Token válido!")
-                logger.info(f"👤 User: {decoded_token.get('email')}")
-                logger.info(f"👤 UID: {decoded_token.get('uid')}")
-                
-                return Response({
-                    "success": True,
-                    "message": "Token válido",
-                    "user": {
-                        "email": decoded_token.get('email'),
-                        "uid": decoded_token.get('uid'),
-                        "name": decoded_token.get('name', 'N/A')
-                    },
-                    "token_info": {
-                        "iss": decoded_token.get('iss'),
-                        "aud": decoded_token.get('aud'),
-                        "exp": decoded_token.get('exp'),
-                        "iat": decoded_token.get('iat')
-                    }
-                }, status=status.HTTP_200_OK)
-                
-            except firebase_auth.InvalidIdTokenError as e:
-                logger.error(f"❌ Token inválido: {str(e)}")
-                return Response({
-                    "error": "Invalid token",
-                    "detail": str(e),
-                    "type": "InvalidIdTokenError"
-                }, status=status.HTTP_401_UNAUTHORIZED)
-                
-            except firebase_auth.ExpiredIdTokenError as e:
-                logger.error(f"❌ Token expirado: {str(e)}")
-                return Response({
-                    "error": "Token expired",
-                    "detail": str(e),
-                    "type": "ExpiredIdTokenError"
-                }, status=status.HTTP_401_UNAUTHORIZED)
-                
-            except firebase_auth.RevokedIdTokenError as e:
-                logger.error(f"❌ Token revocado: {str(e)}")
-                return Response({
-                    "error": "Token revoked",
-                    "detail": str(e),
-                    "type": "RevokedIdTokenError"
-                }, status=status.HTTP_401_UNAUTHORIZED)
-                
-            except Exception as e:
-                logger.error(f"❌ Error verificando token: {str(e)}")
-                logger.error(f"Tipo: {type(e).__name__}")
-                import traceback
-                logger.error(traceback.format_exc())
-                return Response({
-                    "error": "Verification error",
-                    "detail": str(e),
-                    "type": type(e).__name__
-                }, status=status.HTTP_401_UNAUTHORIZED)
-                
-        except Exception as e:
-            logger.error(f"❌ Error general: {str(e)}")
-            import traceback
-            logger.error(traceback.format_exc())
-            return Response({
-                "error": "Server error",
-                "detail": str(e)
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-
+# ============================================
+# HEALTH CHECK
+# ============================================
 class HealthCheck(APIView):
     """GET /api/health/ - Verificar estado del servidor"""
     
@@ -1156,7 +1176,6 @@ class HealthCheck(APIView):
         logger.info("💚 [HEALTH CHECK] Servidor funcionando")
         
         try:
-            # Verificar conexión a Firebase
             docs_count = len(list(db.collection("courses").limit(1).stream()))
             firebase_status = "✅ Conectado"
         except Exception as e:
@@ -1167,9 +1186,6 @@ class HealthCheck(APIView):
             "timestamp": datetime.now().isoformat(),
             "firebase": firebase_status,
             "endpoints": {
-                "test": {
-                    "test_token": "/api/test-token/"
-                },
                 "asistencias": {
                     "list": "/api/asistencias/",
                     "create": "/api/asistencias/crear/",
@@ -1184,11 +1200,8 @@ class HealthCheck(APIView):
                     "get_curso": "/api/horarios/cursos/<course_id>/",
                     "update_curso": "/api/horarios/cursos/<course_id>/",
                     "add_clase": "/api/horarios/clases/",
-                    "delete_clase": "/api/horarios/clases/<clase_id>/"
-                },
-                "debug": {
-                    "cursos": "/api/debug/cursos/",
-                    "asistencias_public": "/api/debug/asistencias/"
+                    "update_clase": "/api/horarios/clases/ (PUT)",
+                    "delete_clase": "/api/horarios/clases/ (DELETE)"
                 }
             }
         }, status=status.HTTP_200_OK)
