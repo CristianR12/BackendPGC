@@ -1,7 +1,9 @@
+# src/api_app/views.py - BACKEND COMPLETO MEJORADO
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, permissions
-from firebase_admin import firestore
+from rest_framework.decorators import api_view, permission_classes
+from firebase_admin import firestore, auth as firebase_auth
 from .serializers import (
     AsistenciaSerializer, 
     UserSerializer,
@@ -13,26 +15,104 @@ from .serializers import (
 from firebase_admin.exceptions import FirebaseError
 from google.api_core.exceptions import PermissionDenied, NotFound
 import logging
-from datetime import datetime
+from datetime import datetime, time
 from .permissions import verificar_token
 
 # Configurar logger
 logger = logging.getLogger(__name__)
 db = firestore.client()
 
-# ----- MANEJO DE ERRORES FIREBASE ----
+# ----- FUNCIONES AUXILIARES -----
+def validar_conflicto_horario(profesor_id, new_class, exclude_course_id=None, exclude_class_index=None):
+    """
+    Valida si hay conflicto de horario para el profesor
+    
+    Args:
+        profesor_id: UID del profesor
+        new_class: Dict con {day, iniTime, endTime}
+        exclude_course_id: ID del curso a excluir (para ediciones)
+        exclude_class_index: Índice de la clase a excluir
+    
+    Returns:
+        Tuple (bool, str) - (hay_conflicto, mensaje_error)
+    """
+    try:
+        # Obtener todos los cursos del profesor
+        courses_ref = db.collection("courses")
+        query = courses_ref.where("profesorID", "==", profesor_id)
+        docs = query.stream()
+        
+        new_day = new_class.get('day')
+        new_ini = new_class.get('iniTime')
+        new_fin = new_class.get('endTime')
+        
+        # Convertir tiempos a minutos para comparación
+        new_ini_min = int(new_ini.split(':')[0]) * 60 + int(new_ini.split(':')[1])
+        new_fin_min = int(new_fin.split(':')[0]) * 60 + int(new_fin.split(':')[1])
+        
+        for doc in docs:
+            curso_id = doc.id
+            
+            # Saltar el curso excluido (para ediciones)
+            if exclude_course_id and curso_id == exclude_course_id:
+                continue
+            
+            curso_data = doc.to_dict()
+            schedule = curso_data.get('schedule', [])
+            
+            for idx, clase in enumerate(schedule):
+                # Saltar la clase excluida (para ediciones)
+                if exclude_course_id == curso_id and exclude_class_index == idx:
+                    continue
+                
+                # Solo verificar si es el mismo día
+                if clase.get('day') != new_day:
+                    continue
+                
+                clase_ini = clase.get('iniTime')
+                clase_fin = clase.get('endTime')
+                
+                clase_ini_min = int(clase_ini.split(':')[0]) * 60 + int(clase_ini.split(':')[1])
+                clase_fin_min = int(clase_fin.split(':')[0]) * 60 + int(clase_fin.split(':')[1])
+                
+                # Verificar solapamiento
+                # Hay conflicto si: new_ini < clase_fin AND new_fin > clase_ini
+                if new_ini_min < clase_fin_min and new_fin_min > clase_ini_min:
+                    return True, f"Conflicto de horario: ya tiene clase de {clase_ini} a {clase_fin} el {new_day}"
+        
+        return False, None
+        
+    except Exception as e:
+        logger.error(f"❌ Error al validar conflicto: {str(e)}")
+        return False, str(e)
+
+
 def handle_firestore_error(e):
+    """Manejo centralizado de errores Firestore"""
     if isinstance(e, PermissionDenied):
-        return Response({"error": "Acceso denegado a Firestore"}, status=status.HTTP_403_FORBIDDEN)
+        return Response(
+            {"error": "Acceso denegado a Firestore"},
+            status=status.HTTP_403_FORBIDDEN
+        )
     elif isinstance(e, NotFound):
-        return Response({"error": "Documento no encontrado"}, status=status.HTTP_404_NOT_FOUND)
+        return Response(
+            {"error": "Documento no encontrado"},
+            status=status.HTTP_404_NOT_FOUND
+        )
     elif isinstance(e, FirebaseError):
-        return Response({"error": "Error interno del servicio Firebase"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response(
+            {"error": "Error interno del servicio Firebase"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
     else:
-        return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response(
+            {"error": str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
 
 # ============================================
-# ASISTENCIAS (Código existente)
+# ASISTENCIAS (Código existente mejorado)
 # ============================================
 
 class AsistenciaList(APIView):
@@ -71,6 +151,7 @@ class AsistenciaList(APIView):
 
 
 class AsistenciaCreate(APIView):
+    """POST /api/asistencias/crear/ - Crear nueva asistencia"""
     def post(self, request):
         token_error = verificar_token(request)
         if token_error:
@@ -106,6 +187,7 @@ class AsistenciaCreate(APIView):
 
 
 class AsistenciaRetrieve(APIView):
+    """GET /api/asistencias/<id>/ - Obtener asistencia por ID"""
     def get(self, request, pk):
         token_error = verificar_token(request)
         if token_error:
@@ -129,6 +211,7 @@ class AsistenciaRetrieve(APIView):
 
 
 class AsistenciaUpdate(APIView):
+    """PUT /api/asistencias/<id>/update/ - Actualizar asistencia"""
     def put(self, request, pk):
         token_error = verificar_token(request)
         if token_error:
@@ -165,6 +248,7 @@ class AsistenciaUpdate(APIView):
 
 
 class AsistenciaDelete(APIView):
+    """DELETE /api/asistencias/<id>/delete/ - Eliminar asistencia"""
     def delete(self, request, pk):
         token_error = verificar_token(request)
         if token_error:
@@ -192,20 +276,18 @@ class AsistenciaDelete(APIView):
 
 
 # ============================================
-# HORARIOS - NUEVOS ENDPOINTS
+# HORARIOS - ENDPOINTS COMPLETOS Y MEJORADOS
 # ============================================
 
 class HorarioProfesorView(APIView):
     """
-    GET /api/horarios/
-    Obtiene todos los cursos del profesor autenticado
-    
-    POST /api/horarios/
-    Crea o actualiza el horario completo del profesor
+    GET /api/horarios/ - Obtener cursos del profesor
+    POST /api/horarios/ - Crear/Actualizar horarios
+    DELETE /api/horarios/ - Eliminar horarios
     """
     
     def get(self, request):
-        """Obtener todos los cursos del profesor"""
+        """Obtener todos los cursos del profesor autenticado"""
         token_error = verificar_token(request)
         if token_error:
             return token_error
@@ -214,7 +296,6 @@ class HorarioProfesorView(APIView):
             logger.info("=" * 60)
             logger.info("📅 [GET] /api/horarios/ - Obtener horario del profesor")
             
-            # Obtener el UID del usuario autenticado
             user_uid = request.user_firebase.get('uid')
             logger.info(f"👤 Profesor UID: {user_uid}")
             
@@ -233,21 +314,10 @@ class HorarioProfesorView(APIView):
             logger.info(f"✅ Total cursos encontrados: {len(cursos)}")
             logger.info("=" * 60)
             
-            # Si no hay cursos, devolver estructura vacía
-            if len(cursos) == 0:
-                return Response({
-                    "profesorEmail": request.user_firebase.get('email'),
-                    "profesorNombre": request.user_firebase.get('name', ''),
-                    "clases": [],
-                    "message": "No hay cursos asignados"
-                }, status=status.HTTP_200_OK)
-            
-            # Transformar a formato esperado por el frontend
-            # El frontend espera un array de cursos con schedule
             return Response({
                 "profesorEmail": request.user_firebase.get('email'),
                 "profesorNombre": request.user_firebase.get('name', ''),
-                "clases": cursos  # Devuelve los cursos completos
+                "clases": cursos
             }, status=status.HTTP_200_OK)
             
         except Exception as e:
@@ -266,11 +336,8 @@ class HorarioProfesorView(APIView):
         try:
             logger.info("=" * 60)
             logger.info("📅 [POST] /api/horarios/ - Crear/Actualizar horario")
-            logger.info(f"📦 Datos recibidos: {request.data}")
             
             user_uid = request.user_firebase.get('uid')
-            
-            # El frontend envía un objeto con 'clases' que es un array
             clases = request.data.get('clases', [])
             
             if not clases:
@@ -279,8 +346,6 @@ class HorarioProfesorView(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
-            # Guardar cada curso (esto asume que vienen cursos completos)
-            # Si el frontend envía solo clases individuales, ajustar lógica
             cursos_guardados = []
             
             for clase in clases:
@@ -289,18 +354,38 @@ class HorarioProfesorView(APIView):
                     curso_data = serializer.validated_data
                     curso_data['profesorID'] = user_uid
                     
+                    # Validar conflictos en el schedule
+                    schedule = curso_data.get('schedule', [])
+                    for idx, clase_item in enumerate(schedule):
+                        hay_conflicto, mensaje = validar_conflicto_horario(
+                            user_uid,
+                            clase_item,
+                            exclude_course_id=clase.get('id')
+                        )
+                        if hay_conflicto:
+                            return Response(
+                                {"error": mensaje},
+                                status=status.HTTP_409_CONFLICT
+                            )
+                    
                     # Si tiene ID, actualizar; si no, crear nuevo
                     if 'id' in clase and clase['id']:
                         doc_ref = db.collection("courses").document(clase['id'])
                         doc_ref.update(curso_data)
                         curso_data['id'] = clase['id']
+                        logger.info(f"✏️ Curso actualizado: {clase['id']}")
                     else:
                         doc_ref = db.collection("courses").add(curso_data)
                         curso_data['id'] = doc_ref[1].id
+                        logger.info(f"✅ Curso creado: {curso_data['id']}")
                     
                     cursos_guardados.append(curso_data)
                 else:
-                    logger.warning(f"⚠️ Datos inválidos en clase: {serializer.errors}")
+                    logger.warning(f"⚠️ Datos inválidos: {serializer.errors}")
+                    return Response(
+                        {"error": "Datos inválidos", "details": serializer.errors},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
             
             logger.info(f"✅ Horario guardado: {len(cursos_guardados)} cursos")
             logger.info("=" * 60)
@@ -328,7 +413,6 @@ class HorarioProfesorView(APIView):
             
             user_uid = request.user_firebase.get('uid')
             
-            # Buscar todos los cursos del profesor
             courses_ref = db.collection("courses")
             query = courses_ref.where("profesorID", "==", user_uid)
             docs = query.stream()
@@ -337,12 +421,14 @@ class HorarioProfesorView(APIView):
             for doc in docs:
                 doc.reference.delete()
                 deleted_count += 1
+                logger.info(f"   🗑️ Curso eliminado: {doc.id}")
             
             logger.info(f"✅ Eliminados {deleted_count} cursos")
             
             return Response({
                 "success": True,
-                "message": f"Horario eliminado ({deleted_count} cursos)"
+                "message": f"Horario eliminado ({deleted_count} cursos)",
+                "deletedCount": deleted_count
             }, status=status.HTTP_200_OK)
             
         except Exception as e:
@@ -352,11 +438,9 @@ class HorarioProfesorView(APIView):
 
 class HorarioCursoView(APIView):
     """
-    PUT /api/horarios/cursos/<course_id>/
-    Actualiza el horario (schedule) de un curso específico
-    
-    GET /api/horarios/cursos/<course_id>/
-    Obtiene los detalles de un curso específico
+    GET /api/horarios/cursos/<course_id>/ - Obtener curso específico
+    PUT /api/horarios/cursos/<course_id>/ - Actualizar schedule del curso
+    DELETE /api/horarios/cursos/<course_id>/ - Eliminar curso
     """
     
     def get(self, request, course_id):
@@ -366,6 +450,8 @@ class HorarioCursoView(APIView):
             return token_error
 
         try:
+            logger.info(f"📖 [GET] /api/horarios/cursos/{course_id}/")
+            
             doc = db.collection("courses").document(course_id).get()
             
             if not doc.exists:
@@ -384,7 +470,7 @@ class HorarioCursoView(APIView):
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
     def put(self, request, course_id):
-        """Actualizar el horario de un curso"""
+        """Actualizar el horario (schedule) de un curso"""
         token_error = verificar_token(request)
         if token_error:
             return token_error
@@ -410,8 +496,26 @@ class HorarioCursoView(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
-            # Actualizar solo el schedule
+            # Obtener profesor para validar conflictos
+            curso_actual = doc.to_dict()
+            profesor_id = curso_actual.get('profesorID')
+            
+            # Validar conflictos en el nuevo schedule
             schedule = serializer.validated_data['schedule']
+            for idx, clase in enumerate(schedule):
+                hay_conflicto, mensaje = validar_conflicto_horario(
+                    profesor_id,
+                    clase,
+                    exclude_course_id=course_id,
+                    exclude_class_index=idx
+                )
+                if hay_conflicto:
+                    return Response(
+                        {"error": mensaje},
+                        status=status.HTTP_409_CONFLICT
+                    )
+            
+            # Actualizar schedule
             doc_ref.update({"schedule": schedule})
             
             # Obtener documento actualizado
@@ -426,15 +530,44 @@ class HorarioCursoView(APIView):
         except Exception as e:
             logger.error(f"❌ Error: {str(e)}")
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    
+    def delete(self, request, course_id):
+        """Eliminar un curso completo"""
+        token_error = verificar_token(request)
+        if token_error:
+            return token_error
+
+        try:
+            logger.info(f"🗑️ [DELETE] /api/horarios/cursos/{course_id}/ - Eliminar curso")
+            
+            doc_ref = db.collection("courses").document(course_id)
+            doc = doc_ref.get()
+            
+            if not doc.exists:
+                return Response(
+                    {"error": "Curso no encontrado"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            doc_ref.delete()
+            logger.info(f"✅ Curso eliminado: {course_id}")
+            
+            return Response({
+                "success": True,
+                "message": "Curso eliminado correctamente",
+                "courseId": course_id
+            }, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            logger.error(f"❌ Error: {str(e)}")
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 class HorarioClaseView(APIView):
     """
-    POST /api/horarios/clases/
-    Agrega una clase al horario de un curso
-    
-    DELETE /api/horarios/clases/<clase_id>/
-    Elimina una clase específica del horario
+    POST /api/horarios/clases/ - Agregar clase a un curso
+    PUT /api/horarios/clases/<clase_id>/ - Actualizar una clase
+    DELETE /api/horarios/clases/<clase_id>/ - Eliminar una clase
     """
     
     def post(self, request):
@@ -471,16 +604,103 @@ class HorarioClaseView(APIView):
                     status=status.HTTP_404_NOT_FOUND
                 )
             
-            # Agregar nueva clase al schedule
             curso_data = doc.to_dict()
+            profesor_id = curso_data.get('profesorID')
+            
+            # Validar conflicto
+            new_class = serializer.validated_data
+            hay_conflicto, mensaje = validar_conflicto_horario(profesor_id, new_class)
+            if hay_conflicto:
+                return Response(
+                    {"error": mensaje},
+                    status=status.HTTP_409_CONFLICT
+                )
+            
+            # Agregar nueva clase al schedule
             schedule = curso_data.get('schedule', [])
-            schedule.append(serializer.validated_data)
+            schedule.append(new_class)
             
             doc_ref.update({"schedule": schedule})
             
             logger.info(f"✅ Clase agregada al curso {course_id}")
             
-            return Response(serializer.validated_data, status=status.HTTP_201_CREATED)
+            return Response({
+                **new_class,
+                "index": len(schedule) - 1
+            }, status=status.HTTP_201_CREATED)
+            
+        except Exception as e:
+            logger.error(f"❌ Error: {str(e)}")
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    
+    def put(self, request, clase_id):
+        """Actualizar una clase específica"""
+        token_error = verificar_token(request)
+        if token_error:
+            return token_error
+
+        try:
+            logger.info(f"✏️ [PUT] /api/horarios/clases/{clase_id}/ - Actualizar clase")
+            
+            course_id = request.data.get('courseId')
+            class_index = request.data.get('classIndex')
+            
+            if not course_id or class_index is None:
+                return Response(
+                    {"error": "courseId y classIndex son requeridos"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Validar datos
+            serializer = ScheduleClassSerializer(data=request.data)
+            if not serializer.is_valid():
+                return Response(
+                    {"error": "Datos inválidos", "details": serializer.errors},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Obtener curso
+            doc_ref = db.collection("courses").document(course_id)
+            doc = doc_ref.get()
+            
+            if not doc.exists:
+                return Response(
+                    {"error": "Curso no encontrado"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            curso_data = doc.to_dict()
+            schedule = curso_data.get('schedule', [])
+            
+            if class_index >= len(schedule):
+                return Response(
+                    {"error": "Índice de clase fuera de rango"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            profesor_id = curso_data.get('profesorID')
+            
+            # Validar conflicto (excluyendo esta clase)
+            new_class = serializer.validated_data
+            hay_conflicto, mensaje = validar_conflicto_horario(
+                profesor_id,
+                new_class,
+                exclude_course_id=course_id,
+                exclude_class_index=class_index
+            )
+            if hay_conflicto:
+                return Response(
+                    {"error": mensaje},
+                    status=status.HTTP_409_CONFLICT
+                )
+            
+            # Actualizar clase
+            schedule[class_index] = new_class
+            doc_ref.update({"schedule": schedule})
+            
+            logger.info(f"✅ Clase actualizada en curso {course_id}")
+            
+            return Response(new_class, status=status.HTTP_200_OK)
             
         except Exception as e:
             logger.error(f"❌ Error: {str(e)}")
@@ -493,16 +713,156 @@ class HorarioClaseView(APIView):
             return token_error
 
         try:
-            # Nota: Esta implementación asume que clase_id es un identificador
-            # único dentro del schedule. Ajustar según tu lógica.
-            logger.info(f"🗑️ [DELETE] /api/horarios/clases/{clase_id}/")
+            logger.info(f"🗑️ [DELETE] /api/horarios/clases/{clase_id}/ - Eliminar clase")
             
-            return Response(
-                {"message": "Funcionalidad en desarrollo"},
-                status=status.HTTP_501_NOT_IMPLEMENTED
-            )
+            course_id = request.data.get('courseId')
+            class_index = request.data.get('classIndex')
+            
+            if not course_id or class_index is None:
+                return Response(
+                    {"error": "courseId y classIndex son requeridos"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Obtener curso
+            doc_ref = db.collection("courses").document(course_id)
+            doc = doc_ref.get()
+            
+            if not doc.exists:
+                return Response(
+                    {"error": "Curso no encontrado"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            curso_data = doc.to_dict()
+            schedule = curso_data.get('schedule', [])
+            
+            if class_index >= len(schedule):
+                return Response(
+                    {"error": "Índice de clase fuera de rango"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Eliminar clase del schedule
+            deleted_class = schedule.pop(class_index)
+            doc_ref.update({"schedule": schedule})
+            
+            logger.info(f"✅ Clase eliminada del curso {course_id}")
+            
+            return Response({
+                "success": True,
+                "message": "Clase eliminada correctamente",
+                "deletedClass": deleted_class,
+                "courseId": course_id
+            }, status=status.HTTP_200_OK)
             
         except Exception as e:
+            logger.error(f"❌ Error: {str(e)}")
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class ObtenerEstudiantesView(APIView):
+    """
+    GET /api/horarios/cursos/<course_id>/estudiantes/
+    Obtiene la lista de estudiantes de un curso
+    """
+    
+    def get(self, request, course_id):
+        """Obtener estudiantes de un curso"""
+        token_error = verificar_token(request)
+        if token_error:
+            return token_error
+
+        try:
+            logger.info(f"👥 [GET] /api/horarios/cursos/{course_id}/estudiantes/")
+            
+            doc = db.collection("courses").document(course_id).get()
+            
+            if not doc.exists:
+                return Response(
+                    {"error": "Curso no encontrado"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            curso_data = doc.to_dict()
+            estudiante_ids = curso_data.get('estudianteID', [])
+            
+            # Obtener datos de los estudiantes
+            estudiantes = []
+            for est_id in estudiante_ids:
+                try:
+                    person_doc = db.collection("person").document(est_id).get()
+                    if person_doc.exists:
+                        est_data = person_doc.to_dict()
+                        est_data['uid'] = est_id
+                        estudiantes.append(est_data)
+                except Exception as e:
+                    logger.warning(f"⚠️ No se pudo obtener datos del estudiante {est_id}: {str(e)}")
+            
+            logger.info(f"✅ Devolviendo {len(estudiantes)} estudiantes")
+            
+            return Response({
+                "courseId": course_id,
+                "courseName": curso_data.get('nameCourse'),
+                "estudiantes": estudiantes,
+                "totalEstudiantes": len(estudiantes)
+            }, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            logger.error(f"❌ Error: {str(e)}")
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class ConflictosHorarioView(APIView):
+    """
+    POST /api/horarios/validar-conflictos/
+    Valida conflictos de horario sin guardar
+    """
+    
+    def post(self, request):
+        """Validar conflictos de horario"""
+        token_error = verificar_token(request)
+        if token_error:
+            return token_error
+
+        try:
+            logger.info("⚠️ [POST] /api/horarios/validar-conflictos/")
+            
+            profesor_id = request.data.get('profesorId')
+            new_class = request.data.get('clase')
+            exclude_course_id = request.data.get('excludeCourseId')
+            exclude_class_index = request.data.get('excludeClassIndex')
+            
+            if not profesor_id or not new_class:
+                return Response(
+                    {"error": "profesorId y clase son requeridos"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Validar estructura de la clase
+            serializer = ScheduleClassSerializer(data=new_class)
+            if not serializer.is_valid():
+                return Response(
+                    {"error": "Datos de clase inválidos", "details": serializer.errors},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Validar conflicto
+            hay_conflicto, mensaje = validar_conflicto_horario(
+                profesor_id,
+                serializer.validated_data,
+                exclude_course_id=exclude_course_id,
+                exclude_class_index=exclude_class_index
+            )
+            
+            return Response({
+                "hasConflict": hay_conflicto,
+                "message": mensaje,
+                "clase": serializer.validated_data
+            }, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            logger.error(f"❌ Error: {str(e)}")
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -528,20 +888,24 @@ class HealthCheck(APIView):
             "firebase": firebase_status,
             "endpoints": {
                 "asistencias": {
-                    "list": "/api/asistencias/",
-                    "create": "/api/asistencias/crear/",
-                    "detail": "/api/asistencias/<id>/",
-                    "update": "/api/asistencias/<id>/update/",
-                    "delete": "/api/asistencias/<id>/delete/"
+                    "list": "GET /api/asistencias/",
+                    "create": "POST /api/asistencias/crear/",
+                    "detail": "GET /api/asistencias/<id>/",
+                    "update": "PUT /api/asistencias/<id>/update/",
+                    "delete": "DELETE /api/asistencias/<id>/delete/"
                 },
                 "horarios": {
-                    "get_profesor": "/api/horarios/",
-                    "update_profesor": "/api/horarios/",
-                    "delete_profesor": "/api/horarios/",
-                    "get_curso": "/api/horarios/cursos/<course_id>/",
-                    "update_curso": "/api/horarios/cursos/<course_id>/",
-                    "add_clase": "/api/horarios/clases/",
-                    "delete_clase": "/api/horarios/clases/<clase_id>/"
+                    "get_profesor": "GET /api/horarios/",
+                    "create_horario": "POST /api/horarios/",
+                    "delete_horario": "DELETE /api/horarios/",
+                    "get_curso": "GET /api/horarios/cursos/<course_id>/",
+                    "update_curso": "PUT /api/horarios/cursos/<course_id>/",
+                    "delete_curso": "DELETE /api/horarios/cursos/<course_id>/",
+                    "add_clase": "POST /api/horarios/clases/",
+                    "update_clase": "PUT /api/horarios/clases/<clase_id>/",
+                    "delete_clase": "DELETE /api/horarios/clases/<clase_id>/",
+                    "get_estudiantes": "GET /api/horarios/cursos/<course_id>/estudiantes/",
+                    "validar_conflictos": "POST /api/horarios/validar-conflictos/"
                 }
             }
         }, status=status.HTTP_200_OK)
