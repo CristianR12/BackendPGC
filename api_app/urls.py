@@ -13,6 +13,9 @@ from .views import (
     HorarioClaseView,
     # Health Check
     HealthCheck,
+    # Debug
+    DebugCursosView,
+    DebugAsistenciasPublicView,
 )
 
 urlpatterns = [
@@ -20,6 +23,12 @@ urlpatterns = [
     # HEALTH CHECK
     # ============================================
     path("health/", HealthCheck.as_view(), name="health-check"),
+    
+    # ============================================
+    # DEBUG - QUITAR EN PRODUCCIÓN
+    # ============================================
+    path("debug/cursos/", DebugCursosView.as_view(), name="debug-cursos"),
+    path("debug/asistencias/", DebugAsistenciasPublicView.as_view(), name="debug-asistencias-public"),
     
     # ============================================
     # ASISTENCIAS ANTIGUAS (Mantener por compatibilidad)
