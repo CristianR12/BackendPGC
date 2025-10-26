@@ -812,17 +812,18 @@ class HorarioProfesorView(APIView):
     """
     
     def get(self, request):
+        logger.info("=" * 60)
+        logger.info("📅 [GET] /api/horarios/ - Obtener horario del usuario")
+        logger.info(f"📋 Headers: {dict(request.headers)}")
+        
         token_error = verificar_token(request)
         if token_error:
+            logger.error("❌ Error de autenticación en verificar_token")
             return token_error
 
         try:
-            logger.info("=" * 60)
-            logger.info("📅 [GET] /api/horarios/ - Obtener horario del usuario")
-            
             user_uid = request.user_firebase.get('uid')
             logger.info(f"👤 Usuario UID: {user_uid}")
-            
             person_data = buscar_persona_por_uid(user_uid)
             
             if not person_data:
