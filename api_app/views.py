@@ -32,13 +32,13 @@ def handle_firestore_error(e):
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 # ============================================
-# ASISTENCIAS (Código existente)
+# ASISTENCIAS - MODIFICADO PARA SUBCOLECCIONES
 # ============================================
 
 class AsistenciaList(APIView):
     """
     GET /api/asistencias/
-    Lista todas las asistencias registradas
+    Lista todas las asistencias desde las subcolecciones de courses
     """
     def get(self, request):
         token_error = verificar_token(request)
@@ -47,20 +47,53 @@ class AsistenciaList(APIView):
 
         try:
             logger.info("=" * 60)
-            logger.info("📥 [GET] /api/asistencias/ - Petición recibida")
+            logger.info("📥 [GET] /api/asistencias/ - Obtener asistencias desde subcolecciones")
             
-            docs = db.collection("asistenciaReconocimiento").stream()
-            data = []
+            asistencias_list = []
             
-            for doc in docs:
-                doc_data = doc.to_dict()
-                doc_data['id'] = doc.id
-                data.append(doc_data)
+            # Obtener todos los cursos
+            courses_ref = db.collection("courses")
+            courses = courses_ref.stream()
             
-            logger.info(f"✅ [SUCCESS] Devolviendo {len(data)} asistencias")
+            for course in courses:
+                course_id = course.id
+                course_data = course.to_dict()
+                course_name = course_data.get('nameCourse', 'Sin nombre')
+                
+                logger.info(f"   📚 Procesando curso: {course_name} (ID: {course_id})")
+                
+                # Obtener la subcolección 'assistances' del curso
+                assistances_ref = db.collection("courses").document(course_id).collection("assistances")
+                assistances = assistances_ref.stream()
+                
+                for assistance_doc in assistances:
+                    fecha_id = assistance_doc.id  # El ID es la fecha
+                    assistance_data = assistance_doc.to_dict()
+                    
+                    # Cada documento de asistencia tiene campos con cédulas de estudiantes
+                    # Iterar sobre cada campo que representa un estudiante
+                    for cedula, estudiante_data in assistance_data.items():
+                        if isinstance(estudiante_data, dict):
+                            # Crear objeto de asistencia
+                            asistencia = {
+                                'id': f"{course_id}_{fecha_id}_{cedula}",  # ID único compuesto
+                                'estudiante': cedula,  # Por ahora usamos la cédula
+                                'asignatura': course_name,
+                                'fechaYhora': fecha_id,  # La fecha está en el ID del documento
+                                'estadoAsistencia': 'Presente' if estudiante_data.get('estadoAsistencia') == 'Presente' else 
+                                                   'Ausente' if estudiante_data.get('estadoAsistencia') == 'Ausente' else 
+                                                   'Tiene Excusa',
+                                'horaRegistro': estudiante_data.get('horaRegistro', ''),
+                                'late': estudiante_data.get('late', False),
+                                'courseId': course_id,
+                                'fechaDocId': fecha_id
+                            }
+                            asistencias_list.append(asistencia)
+            
+            logger.info(f"✅ [SUCCESS] Total asistencias encontradas: {len(asistencias_list)}")
             logger.info("=" * 60)
             
-            return Response(data, status=status.HTTP_200_OK)
+            return Response(asistencias_list, status=status.HTTP_200_OK)
             
         except Exception as e:
             logger.error(f"❌ [ERROR] Error en AsistenciaList: {str(e)}")
@@ -71,6 +104,10 @@ class AsistenciaList(APIView):
 
 
 class AsistenciaCreate(APIView):
+    """
+    POST /api/asistencias/crear/
+    Crea una nueva asistencia en la subcolección del curso
+    """
     def post(self, request):
         token_error = verificar_token(request)
         if token_error:
@@ -78,27 +115,68 @@ class AsistenciaCreate(APIView):
 
         try:
             logger.info("📥 [POST] /api/asistencias/crear/")
-            serializer = AsistenciaSerializer(data=request.data)
             
-            if serializer.is_valid():
-                validated_data = serializer.validated_data
-                if 'fechaYhora' not in validated_data or not validated_data['fechaYhora']:
-                    validated_data['fechaYhora'] = datetime.now().isoformat()
-                
-                doc_ref = db.collection("asistenciaReconocimiento").add(validated_data)
-                doc_id = doc_ref[1].id
-                
-                logger.info(f"✅ Asistencia creada: {doc_id}")
-                
+            # Validar datos requeridos
+            estudiante_cedula = request.data.get('estudiante')
+            estado_asistencia = request.data.get('estadoAsistencia')
+            asignatura = request.data.get('asignatura')
+            
+            if not all([estudiante_cedula, estado_asistencia, asignatura]):
                 return Response(
-                    {"id": doc_id, **validated_data},
-                    status=status.HTTP_201_CREATED
-                )
-            else:
-                return Response(
-                    {"error": "Datos inválidos", "details": serializer.errors},
+                    {"error": "Faltan campos requeridos: estudiante, estadoAsistencia, asignatura"},
                     status=status.HTTP_400_BAD_REQUEST
                 )
+            
+            # Buscar el curso por nombre
+            courses_ref = db.collection("courses")
+            course_query = courses_ref.where("nameCourse", "==", asignatura).limit(1).stream()
+            
+            course_doc = None
+            for doc in course_query:
+                course_doc = doc
+                break
+            
+            if not course_doc:
+                return Response(
+                    {"error": f"No se encontró el curso: {asignatura}"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            course_id = course_doc.id
+            
+            # Fecha actual (formato: YYYY-MM-DD)
+            fecha_hoy = datetime.now().strftime("%Y-%m-%d")
+            hora_actual = datetime.now().strftime("%H:%M:%S")
+            
+            # Referencia al documento de asistencia del día
+            assistance_ref = db.collection("courses").document(course_id).collection("assistances").document(fecha_hoy)
+            
+            # Datos del estudiante
+            estudiante_data = {
+                'estadoAsistencia': estado_asistencia,
+                'horaRegistro': hora_actual,
+                'late': False  # Por defecto no llega tarde
+            }
+            
+            # Actualizar o crear el documento con la cédula del estudiante como campo
+            assistance_ref.set({
+                estudiante_cedula: estudiante_data
+            }, merge=True)
+            
+            logger.info(f"✅ Asistencia creada: {estudiante_cedula} en {asignatura} - {fecha_hoy}")
+            
+            return Response(
+                {
+                    "id": f"{course_id}_{fecha_hoy}_{estudiante_cedula}",
+                    "estudiante": estudiante_cedula,
+                    "estadoAsistencia": estado_asistencia,
+                    "asignatura": asignatura,
+                    "fechaYhora": fecha_hoy,
+                    "horaRegistro": hora_actual,
+                    "late": False
+                },
+                status=status.HTTP_201_CREATED
+            )
                 
         except Exception as e:
             logger.error(f"❌ Error: {str(e)}")
@@ -106,81 +184,194 @@ class AsistenciaCreate(APIView):
 
 
 class AsistenciaRetrieve(APIView):
+    """
+    GET /api/asistencias/<id>/
+    Obtiene una asistencia específica
+    El ID viene en formato: courseId_fechaId_cedula
+    """
     def get(self, request, pk):
         token_error = verificar_token(request)
         if token_error:
             return token_error
 
         try:
-            doc = db.collection("asistenciaReconocimiento").document(pk).get()
+            # Descomponer el ID
+            parts = pk.split('_')
+            if len(parts) < 3:
+                return Response(
+                    {"error": "ID de asistencia inválido"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
             
-            if not doc.exists:
+            course_id = parts[0]
+            fecha_id = parts[1]
+            cedula = '_'.join(parts[2:])  # Por si la cédula tiene guiones bajos
+            
+            # Obtener el documento de asistencia
+            assistance_ref = db.collection("courses").document(course_id).collection("assistances").document(fecha_id)
+            assistance_doc = assistance_ref.get()
+            
+            if not assistance_doc.exists:
                 return Response(
                     {"error": "Asistencia no encontrada"},
                     status=status.HTTP_404_NOT_FOUND
                 )
             
-            data = doc.to_dict()
-            data['id'] = doc.id
+            assistance_data = assistance_doc.to_dict()
+            
+            if cedula not in assistance_data:
+                return Response(
+                    {"error": "Estudiante no encontrado en esta asistencia"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            # Obtener nombre del curso
+            course_doc = db.collection("courses").document(course_id).get()
+            course_name = course_doc.to_dict().get('nameCourse', 'Sin nombre') if course_doc.exists else 'Sin nombre'
+            
+            estudiante_data = assistance_data[cedula]
+            
+            data = {
+                'id': pk,
+                'estudiante': cedula,
+                'asignatura': course_name,
+                'fechaYhora': fecha_id,
+                'estadoAsistencia': estudiante_data.get('estadoAsistencia', 'Presente'),
+                'horaRegistro': estudiante_data.get('horaRegistro', ''),
+                'late': estudiante_data.get('late', False),
+                'courseId': course_id,
+                'fechaDocId': fecha_id
+            }
+            
             return Response(data, status=status.HTTP_200_OK)
             
         except Exception as e:
+            logger.error(f"❌ Error: {str(e)}")
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 class AsistenciaUpdate(APIView):
+    """
+    PUT /api/asistencias/<id>/update/
+    Actualiza una asistencia específica
+    """
     def put(self, request, pk):
         token_error = verificar_token(request)
         if token_error:
             return token_error
 
         try:
-            doc_ref = db.collection("asistenciaReconocimiento").document(pk)
-            doc = doc_ref.get()
+            # Descomponer el ID
+            parts = pk.split('_')
+            if len(parts) < 3:
+                return Response(
+                    {"error": "ID de asistencia inválido"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
             
-            if not doc.exists:
+            course_id = parts[0]
+            fecha_id = parts[1]
+            cedula = '_'.join(parts[2:])
+            
+            # Referencia al documento
+            assistance_ref = db.collection("courses").document(course_id).collection("assistances").document(fecha_id)
+            assistance_doc = assistance_ref.get()
+            
+            if not assistance_doc.exists:
                 return Response(
                     {"error": "Asistencia no encontrada"},
                     status=status.HTTP_404_NOT_FOUND
                 )
             
-            update_data = {}
-            if 'estudiante' in request.data:
-                update_data['estudiante'] = request.data['estudiante']
+            assistance_data = assistance_doc.to_dict()
+            
+            if cedula not in assistance_data:
+                return Response(
+                    {"error": "Estudiante no encontrado"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            # Actualizar datos del estudiante
+            estudiante_data = assistance_data[cedula]
+            
             if 'estadoAsistencia' in request.data:
-                update_data['estadoAsistencia'] = request.data['estadoAsistencia']
-            if 'asignatura' in request.data:
-                update_data['asignatura'] = request.data['asignatura']
+                estudiante_data['estadoAsistencia'] = request.data['estadoAsistencia']
             
-            doc_ref.update(update_data)
+            # Actualizar en Firestore
+            assistance_ref.update({
+                cedula: estudiante_data
+            })
             
-            updated_doc = doc_ref.get()
-            updated_data = updated_doc.to_dict()
-            updated_data['id'] = pk
+            # Obtener nombre del curso
+            course_doc = db.collection("courses").document(course_id).get()
+            course_name = course_doc.to_dict().get('nameCourse', 'Sin nombre') if course_doc.exists else 'Sin nombre'
+            
+            updated_data = {
+                'id': pk,
+                'estudiante': cedula,
+                'asignatura': course_name,
+                'fechaYhora': fecha_id,
+                'estadoAsistencia': estudiante_data.get('estadoAsistencia'),
+                'horaRegistro': estudiante_data.get('horaRegistro', ''),
+                'late': estudiante_data.get('late', False)
+            }
+            
+            logger.info(f"✅ Asistencia actualizada: {pk}")
             
             return Response(updated_data, status=status.HTTP_200_OK)
             
         except Exception as e:
+            logger.error(f"❌ Error: {str(e)}")
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 class AsistenciaDelete(APIView):
+    """
+    DELETE /api/asistencias/<id>/delete/
+    Elimina una asistencia específica
+    """
     def delete(self, request, pk):
         token_error = verificar_token(request)
         if token_error:
             return token_error
 
         try:
-            doc_ref = db.collection("asistenciaReconocimiento").document(pk)
-            doc = doc_ref.get()
+            # Descomponer el ID
+            parts = pk.split('_')
+            if len(parts) < 3:
+                return Response(
+                    {"error": "ID de asistencia inválido"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
             
-            if not doc.exists:
+            course_id = parts[0]
+            fecha_id = parts[1]
+            cedula = '_'.join(parts[2:])
+            
+            # Referencia al documento
+            assistance_ref = db.collection("courses").document(course_id).collection("assistances").document(fecha_id)
+            assistance_doc = assistance_ref.get()
+            
+            if not assistance_doc.exists:
                 return Response(
                     {"error": "Asistencia no encontrada"},
                     status=status.HTTP_404_NOT_FOUND
                 )
             
-            doc_ref.delete()
+            assistance_data = assistance_doc.to_dict()
+            
+            if cedula not in assistance_data:
+                return Response(
+                    {"error": "Estudiante no encontrado"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            # Eliminar el campo del estudiante
+            assistance_ref.update({
+                cedula: firestore.DELETE_FIELD
+            })
+            
+            logger.info(f"✅ Asistencia eliminada: {pk}")
             
             return Response(
                 {'success': True, 'message': 'Asistencia eliminada', 'id': pk},
@@ -188,11 +379,12 @@ class AsistenciaDelete(APIView):
             )
             
         except Exception as e:
+            logger.error(f"❌ Error: {str(e)}")
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 # ============================================
-# HORARIOS - NUEVOS ENDPOINTS
+# HORARIOS - ENDPOINTS EXISTENTES
 # ============================================
 
 class HorarioProfesorView(APIView):
@@ -243,11 +435,10 @@ class HorarioProfesorView(APIView):
                 }, status=status.HTTP_200_OK)
             
             # Transformar a formato esperado por el frontend
-            # El frontend espera un array de cursos con schedule
             return Response({
                 "profesorEmail": request.user_firebase.get('email'),
                 "profesorNombre": request.user_firebase.get('name', ''),
-                "clases": cursos  # Devuelve los cursos completos
+                "clases": cursos
             }, status=status.HTTP_200_OK)
             
         except Exception as e:
@@ -270,7 +461,6 @@ class HorarioProfesorView(APIView):
             
             user_uid = request.user_firebase.get('uid')
             
-            # El frontend envía un objeto con 'clases' que es un array
             clases = request.data.get('clases', [])
             
             if not clases:
@@ -279,8 +469,6 @@ class HorarioProfesorView(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
-            # Guardar cada curso (esto asume que vienen cursos completos)
-            # Si el frontend envía solo clases individuales, ajustar lógica
             cursos_guardados = []
             
             for clase in clases:
@@ -289,7 +477,6 @@ class HorarioProfesorView(APIView):
                     curso_data = serializer.validated_data
                     curso_data['profesorID'] = user_uid
                     
-                    # Si tiene ID, actualizar; si no, crear nuevo
                     if 'id' in clase and clase['id']:
                         doc_ref = db.collection("courses").document(clase['id'])
                         doc_ref.update(curso_data)
@@ -328,7 +515,6 @@ class HorarioProfesorView(APIView):
             
             user_uid = request.user_firebase.get('uid')
             
-            # Buscar todos los cursos del profesor
             courses_ref = db.collection("courses")
             query = courses_ref.where("profesorID", "==", user_uid)
             docs = query.stream()
@@ -392,7 +578,6 @@ class HorarioCursoView(APIView):
         try:
             logger.info(f"📝 [PUT] /api/horarios/cursos/{course_id}/ - Actualizar horario")
             
-            # Verificar que el curso existe
             doc_ref = db.collection("courses").document(course_id)
             doc = doc_ref.get()
             
@@ -402,7 +587,6 @@ class HorarioCursoView(APIView):
                     status=status.HTTP_404_NOT_FOUND
                 )
             
-            # Validar datos
             serializer = UpdateScheduleSerializer(data=request.data)
             if not serializer.is_valid():
                 return Response(
@@ -410,11 +594,9 @@ class HorarioCursoView(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
-            # Actualizar solo el schedule
             schedule = serializer.validated_data['schedule']
             doc_ref.update({"schedule": schedule})
             
-            # Obtener documento actualizado
             updated_doc = doc_ref.get()
             updated_data = updated_doc.to_dict()
             updated_data['id'] = course_id
@@ -453,7 +635,6 @@ class HorarioClaseView(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
-            # Validar datos de la clase
             serializer = ScheduleClassSerializer(data=request.data)
             if not serializer.is_valid():
                 return Response(
@@ -461,7 +642,6 @@ class HorarioClaseView(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
-            # Obtener curso actual
             doc_ref = db.collection("courses").document(course_id)
             doc = doc_ref.get()
             
@@ -471,7 +651,6 @@ class HorarioClaseView(APIView):
                     status=status.HTTP_404_NOT_FOUND
                 )
             
-            # Agregar nueva clase al schedule
             curso_data = doc.to_dict()
             schedule = curso_data.get('schedule', [])
             schedule.append(serializer.validated_data)
@@ -493,8 +672,6 @@ class HorarioClaseView(APIView):
             return token_error
 
         try:
-            # Nota: Esta implementación asume que clase_id es un identificador
-            # único dentro del schedule. Ajustar según tu lógica.
             logger.info(f"🗑️ [DELETE] /api/horarios/clases/{clase_id}/")
             
             return Response(
@@ -517,7 +694,7 @@ class HealthCheck(APIView):
         
         try:
             # Verificar conexión a Firebase
-            docs_count = len(list(db.collection("asistenciaReconocimiento").limit(1).stream()))
+            docs_count = len(list(db.collection("courses").limit(1).stream()))
             firebase_status = "✅ Conectado"
         except Exception as e:
             firebase_status = f"❌ Error: {str(e)}"
