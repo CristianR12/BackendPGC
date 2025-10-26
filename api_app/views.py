@@ -32,13 +32,116 @@ def handle_firestore_error(e):
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 # ============================================
-# ASISTENCIAS - MODIFICADO PARA TODAS LAS SUBCOLECCIONES
+# FUNCIONES AUXILIARES PARA MANEJAR AMBAS ESTRUCTURAS
+# ============================================
+
+def obtener_asistencias_curso(course_id, course_data, course_name):
+    """
+    Obtiene asistencias de un curso, manejando ambas estructuras:
+    1. courses/{courseId}/assistances/{fecha}
+    2. courses/{courseId}/groups/{groupId}/assistances/{fecha}
+    
+    Returns:
+        list: Lista de asistencias encontradas
+    """
+    asistencias_list = []
+    
+    # ✅ CASO 1: Verificar si tiene subcolección 'groups'
+    groups_ref = db.collection("courses").document(course_id).collection("groups")
+    groups = list(groups_ref.stream())
+    
+    if groups:
+        # Tiene grupos - buscar en courses/{courseId}/groups/{groupId}/assistances/{fecha}
+        logger.info(f"   📁 Curso con GRUPOS detectado: {course_name}")
+        
+        for group_doc in groups:
+            group_id = group_doc.id
+            group_data = group_doc.to_dict()
+            group_name = group_data.get('group', group_id)
+            
+            logger.info(f"      📂 Procesando grupo: {group_name} (ID: {group_id})")
+            
+            # Obtener asistencias del grupo
+            assistances_ref = db.collection("courses").document(course_id).collection("groups").document(group_id).collection("assistances")
+            assistances = assistances_ref.stream()
+            
+            asistencias_grupo = 0
+            
+            for assistance_doc in assistances:
+                fecha_id = assistance_doc.id
+                assistance_data = assistance_doc.to_dict()
+                
+                # Cada documento tiene cédulas como campos
+                for cedula, estudiante_data in assistance_data.items():
+                    if isinstance(estudiante_data, dict):
+                        asistencias_grupo += 1
+                        
+                        # Crear objeto de asistencia con información del grupo
+                        asistencia = {
+                            'id': f"{course_id}_{group_id}_{fecha_id}_{cedula}",
+                            'estudiante': cedula,
+                            'asignatura': f"{course_name} - Grupo {group_name}",
+                            'fechaYhora': fecha_id,
+                            'estadoAsistencia': estudiante_data.get('estadoAsistencia', 'Presente'),
+                            'horaRegistro': estudiante_data.get('horaRegistro', ''),
+                            'late': estudiante_data.get('late', False),
+                            'courseId': course_id,
+                            'groupId': group_id,
+                            'fechaDocId': fecha_id,
+                            'hasGroups': True  # Flag para identificar estructura
+                        }
+                        asistencias_list.append(asistencia)
+            
+            logger.info(f"         ✅ {asistencias_grupo} asistencias en grupo {group_name}")
+    
+    else:
+        # ✅ CASO 2: No tiene grupos - estructura simple
+        logger.info(f"   📚 Curso SIN grupos: {course_name}")
+        
+        # Obtener asistencias directamente
+        assistances_ref = db.collection("courses").document(course_id).collection("assistances")
+        assistances = assistances_ref.stream()
+        
+        asistencias_curso = 0
+        
+        for assistance_doc in assistances:
+            fecha_id = assistance_doc.id
+            assistance_data = assistance_doc.to_dict()
+            
+            for cedula, estudiante_data in assistance_data.items():
+                if isinstance(estudiante_data, dict):
+                    asistencias_curso += 1
+                    
+                    asistencia = {
+                        'id': f"{course_id}_{fecha_id}_{cedula}",
+                        'estudiante': cedula,
+                        'asignatura': course_name,
+                        'fechaYhora': fecha_id,
+                        'estadoAsistencia': estudiante_data.get('estadoAsistencia', 'Presente'),
+                        'horaRegistro': estudiante_data.get('horaRegistro', ''),
+                        'late': estudiante_data.get('late', False),
+                        'courseId': course_id,
+                        'fechaDocId': fecha_id,
+                        'hasGroups': False
+                    }
+                    asistencias_list.append(asistencia)
+        
+        logger.info(f"      ✅ {asistencias_curso} asistencias encontradas")
+    
+    return asistencias_list
+
+
+# ============================================
+# ASISTENCIAS - MODIFICADO PARA AMBAS ESTRUCTURAS
 # ============================================
 
 class AsistenciaList(APIView):
     """
     GET /api/asistencias/
-    Lista TODAS las asistencias de TODOS los cursos desde las subcolecciones
+    Lista TODAS las asistencias de TODOS los cursos
+    Maneja ambas estructuras:
+    - courses/{courseId}/assistances/{fecha}
+    - courses/{courseId}/groups/{groupId}/assistances/{fecha}
     """
     def get(self, request):
         token_error = verificar_token(request)
@@ -47,11 +150,11 @@ class AsistenciaList(APIView):
 
         try:
             logger.info("=" * 60)
-            logger.info("📥 [GET] /api/asistencias/ - Obtener TODAS las asistencias de TODOS los cursos")
+            logger.info("📥 [GET] /api/asistencias/ - Obtener TODAS las asistencias")
             
             asistencias_list = []
             
-            # ✅ OBTENER TODOS LOS CURSOS (sin filtrar por profesor)
+            # Obtener todos los cursos
             courses_ref = db.collection("courses")
             all_courses = courses_ref.stream()
             
@@ -62,39 +165,12 @@ class AsistenciaList(APIView):
                 course_data = course.to_dict()
                 course_name = course_data.get('nameCourse', 'Sin nombre')
                 
-                logger.info(f"   📚 Procesando curso: {course_name} (ID: {course_id})")
+                logger.info(f"📚 Procesando curso: {course_name} (ID: {course_id})")
                 cursos_procesados += 1
                 
-                # Obtener la subcolección 'assistances' del curso
-                assistances_ref = db.collection("courses").document(course_id).collection("assistances")
-                assistances = assistances_ref.stream()
-                
-                asistencias_curso = 0
-                
-                for assistance_doc in assistances:
-                    fecha_id = assistance_doc.id  # El ID es la fecha
-                    assistance_data = assistance_doc.to_dict()
-                    
-                    # Cada documento de asistencia tiene campos con cédulas de estudiantes
-                    for cedula, estudiante_data in assistance_data.items():
-                        if isinstance(estudiante_data, dict):
-                            asistencias_curso += 1
-                            
-                            # Crear objeto de asistencia
-                            asistencia = {
-                                'id': f"{course_id}_{fecha_id}_{cedula}",
-                                'estudiante': cedula,
-                                'asignatura': course_name,
-                                'fechaYhora': fecha_id,
-                                'estadoAsistencia': estudiante_data.get('estadoAsistencia', 'Presente'),
-                                'horaRegistro': estudiante_data.get('horaRegistro', ''),
-                                'late': estudiante_data.get('late', False),
-                                'courseId': course_id,
-                                'fechaDocId': fecha_id
-                            }
-                            asistencias_list.append(asistencia)
-                
-                logger.info(f"      ✅ {asistencias_curso} asistencias encontradas en este curso")
+                # Usar función auxiliar para obtener asistencias
+                asistencias_curso = obtener_asistencias_curso(course_id, course_data, course_name)
+                asistencias_list.extend(asistencias_curso)
             
             logger.info(f"✅ [SUCCESS] Total cursos procesados: {cursos_procesados}")
             logger.info(f"✅ [SUCCESS] Total asistencias encontradas: {len(asistencias_list)}")
@@ -115,7 +191,7 @@ class AsistenciaList(APIView):
 class AsistenciaCreate(APIView):
     """
     POST /api/asistencias/crear/
-    Crea una nueva asistencia en la subcolección del curso
+    Crea una nueva asistencia en la subcolección correcta del curso
     """
     def post(self, request):
         token_error = verificar_token(request)
@@ -129,6 +205,7 @@ class AsistenciaCreate(APIView):
             estudiante_cedula = request.data.get('estudiante')
             estado_asistencia = request.data.get('estadoAsistencia')
             asignatura = request.data.get('asignatura')
+            group_id = request.data.get('groupId')  # Opcional
             
             if not all([estudiante_cedula, estado_asistencia, asignatura]):
                 return Response(
@@ -152,13 +229,8 @@ class AsistenciaCreate(APIView):
                 )
             
             course_id = course_doc.id
-            
-            # Fecha actual (formato: YYYY-MM-DD)
             fecha_hoy = datetime.now().strftime("%Y-%m-%d")
             hora_actual = datetime.now().strftime("%H:%M:%S")
-            
-            # Referencia al documento de asistencia del día
-            assistance_ref = db.collection("courses").document(course_id).collection("assistances").document(fecha_hoy)
             
             # Datos del estudiante
             estudiante_data = {
@@ -167,22 +239,43 @@ class AsistenciaCreate(APIView):
                 'late': False
             }
             
-            # Actualizar o crear el documento con la cédula del estudiante como campo
+            # ✅ Determinar la ruta correcta según si tiene grupos
+            if group_id:
+                # Ruta con grupos
+                assistance_ref = (db.collection("courses")
+                                 .document(course_id)
+                                 .collection("groups")
+                                 .document(group_id)
+                                 .collection("assistances")
+                                 .document(fecha_hoy))
+                logger.info(f"📁 Guardando en curso con grupos: {course_id}/groups/{group_id}")
+            else:
+                # Ruta simple
+                assistance_ref = (db.collection("courses")
+                                 .document(course_id)
+                                 .collection("assistances")
+                                 .document(fecha_hoy))
+                logger.info(f"📚 Guardando en curso sin grupos: {course_id}")
+            
+            # Actualizar o crear el documento
             assistance_ref.set({
                 estudiante_cedula: estudiante_data
             }, merge=True)
             
-            logger.info(f"✅ Asistencia creada: {estudiante_cedula} en {asignatura} - {fecha_hoy}")
+            logger.info(f"✅ Asistencia creada: {estudiante_cedula} en {asignatura}")
+            
+            response_id = f"{course_id}_{group_id}_{fecha_hoy}_{estudiante_cedula}" if group_id else f"{course_id}_{fecha_hoy}_{estudiante_cedula}"
             
             return Response(
                 {
-                    "id": f"{course_id}_{fecha_hoy}_{estudiante_cedula}",
+                    "id": response_id,
                     "estudiante": estudiante_cedula,
                     "estadoAsistencia": estado_asistencia,
                     "asignatura": asignatura,
                     "fechaYhora": fecha_hoy,
                     "horaRegistro": hora_actual,
-                    "late": False
+                    "late": False,
+                    "groupId": group_id if group_id else None
                 },
                 status=status.HTTP_201_CREATED
             )
@@ -196,7 +289,9 @@ class AsistenciaRetrieve(APIView):
     """
     GET /api/asistencias/<id>/
     Obtiene una asistencia específica
-    El ID viene en formato: courseId_fechaId_cedula
+    ID puede ser:
+    - courseId_fechaId_cedula (sin grupos)
+    - courseId_groupId_fechaId_cedula (con grupos)
     """
     def get(self, request, pk):
         token_error = verificar_token(request)
@@ -204,20 +299,43 @@ class AsistenciaRetrieve(APIView):
             return token_error
 
         try:
-            # Descomponer el ID
             parts = pk.split('_')
-            if len(parts) < 3:
+            
+            # Determinar si tiene grupos según el número de partes
+            if len(parts) == 4:
+                # Con grupos: courseId_groupId_fechaId_cedula
+                course_id = parts[0]
+                group_id = parts[1]
+                fecha_id = parts[2]
+                cedula = parts[3]
+                has_groups = True
+            elif len(parts) == 3:
+                # Sin grupos: courseId_fechaId_cedula
+                course_id = parts[0]
+                fecha_id = parts[1]
+                cedula = parts[2]
+                group_id = None
+                has_groups = False
+            else:
                 return Response(
                     {"error": "ID de asistencia inválido"},
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
-            course_id = parts[0]
-            fecha_id = parts[1]
-            cedula = '_'.join(parts[2:])
+            # Obtener documento según la estructura
+            if has_groups:
+                assistance_ref = (db.collection("courses")
+                                .document(course_id)
+                                .collection("groups")
+                                .document(group_id)
+                                .collection("assistances")
+                                .document(fecha_id))
+            else:
+                assistance_ref = (db.collection("courses")
+                                .document(course_id)
+                                .collection("assistances")
+                                .document(fecha_id))
             
-            # Obtener el documento de asistencia
-            assistance_ref = db.collection("courses").document(course_id).collection("assistances").document(fecha_id)
             assistance_doc = assistance_ref.get()
             
             if not assistance_doc.exists:
@@ -249,7 +367,9 @@ class AsistenciaRetrieve(APIView):
                 'horaRegistro': estudiante_data.get('horaRegistro', ''),
                 'late': estudiante_data.get('late', False),
                 'courseId': course_id,
-                'fechaDocId': fecha_id
+                'groupId': group_id if has_groups else None,
+                'fechaDocId': fecha_id,
+                'hasGroups': has_groups
             }
             
             return Response(data, status=status.HTTP_200_OK)
@@ -270,20 +390,36 @@ class AsistenciaUpdate(APIView):
             return token_error
 
         try:
-            # Descomponer el ID
             parts = pk.split('_')
-            if len(parts) < 3:
+            
+            # Determinar estructura
+            if len(parts) == 4:
+                course_id, group_id, fecha_id, cedula = parts
+                has_groups = True
+            elif len(parts) == 3:
+                course_id, fecha_id, cedula = parts
+                group_id = None
+                has_groups = False
+            else:
                 return Response(
                     {"error": "ID de asistencia inválido"},
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
-            course_id = parts[0]
-            fecha_id = parts[1]
-            cedula = '_'.join(parts[2:])
-            
             # Referencia al documento
-            assistance_ref = db.collection("courses").document(course_id).collection("assistances").document(fecha_id)
+            if has_groups:
+                assistance_ref = (db.collection("courses")
+                                .document(course_id)
+                                .collection("groups")
+                                .document(group_id)
+                                .collection("assistances")
+                                .document(fecha_id))
+            else:
+                assistance_ref = (db.collection("courses")
+                                .document(course_id)
+                                .collection("assistances")
+                                .document(fecha_id))
+            
             assistance_doc = assistance_ref.get()
             
             if not assistance_doc.exists:
@@ -300,13 +436,12 @@ class AsistenciaUpdate(APIView):
                     status=status.HTTP_404_NOT_FOUND
                 )
             
-            # Actualizar datos del estudiante
+            # Actualizar datos
             estudiante_data = assistance_data[cedula]
             
             if 'estadoAsistencia' in request.data:
                 estudiante_data['estadoAsistencia'] = request.data['estadoAsistencia']
             
-            # Actualizar en Firestore
             assistance_ref.update({
                 cedula: estudiante_data
             })
@@ -322,7 +457,8 @@ class AsistenciaUpdate(APIView):
                 'fechaYhora': fecha_id,
                 'estadoAsistencia': estudiante_data.get('estadoAsistencia'),
                 'horaRegistro': estudiante_data.get('horaRegistro', ''),
-                'late': estudiante_data.get('late', False)
+                'late': estudiante_data.get('late', False),
+                'groupId': group_id if has_groups else None
             }
             
             logger.info(f"✅ Asistencia actualizada: {pk}")
@@ -345,20 +481,36 @@ class AsistenciaDelete(APIView):
             return token_error
 
         try:
-            # Descomponer el ID
             parts = pk.split('_')
-            if len(parts) < 3:
+            
+            # Determinar estructura
+            if len(parts) == 4:
+                course_id, group_id, fecha_id, cedula = parts
+                has_groups = True
+            elif len(parts) == 3:
+                course_id, fecha_id, cedula = parts
+                group_id = None
+                has_groups = False
+            else:
                 return Response(
                     {"error": "ID de asistencia inválido"},
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
-            course_id = parts[0]
-            fecha_id = parts[1]
-            cedula = '_'.join(parts[2:])
-            
             # Referencia al documento
-            assistance_ref = db.collection("courses").document(course_id).collection("assistances").document(fecha_id)
+            if has_groups:
+                assistance_ref = (db.collection("courses")
+                                .document(course_id)
+                                .collection("groups")
+                                .document(group_id)
+                                .collection("assistances")
+                                .document(fecha_id))
+            else:
+                assistance_ref = (db.collection("courses")
+                                .document(course_id)
+                                .collection("assistances")
+                                .document(fecha_id))
+            
             assistance_doc = assistance_ref.get()
             
             if not assistance_doc.exists:
@@ -393,7 +545,7 @@ class AsistenciaDelete(APIView):
 
 
 # ============================================
-# HORARIOS - ENDPOINTS EXISTENTES
+# HORARIOS - ENDPOINTS EXISTENTES (sin cambios)
 # ============================================
 
 class HorarioProfesorView(APIView):
@@ -415,11 +567,9 @@ class HorarioProfesorView(APIView):
             logger.info("=" * 60)
             logger.info("📅 [GET] /api/horarios/ - Obtener horario del profesor")
             
-            # Obtener el UID del usuario autenticado
             user_uid = request.user_firebase.get('uid')
             logger.info(f"👤 Profesor UID: {user_uid}")
             
-            # Buscar cursos donde el profesorID coincida
             courses_ref = db.collection("courses")
             query = courses_ref.where("profesorID", "==", user_uid)
             docs = query.stream()
@@ -434,7 +584,6 @@ class HorarioProfesorView(APIView):
             logger.info(f"✅ Total cursos encontrados: {len(cursos)}")
             logger.info("=" * 60)
             
-            # Si no hay cursos, devolver estructura vacía
             if len(cursos) == 0:
                 return Response({
                     "profesorEmail": request.user_firebase.get('email'),
@@ -443,7 +592,6 @@ class HorarioProfesorView(APIView):
                     "message": "No hay cursos asignados"
                 }, status=status.HTTP_200_OK)
             
-            # Transformar a formato esperado por el frontend
             return Response({
                 "profesorEmail": request.user_firebase.get('email'),
                 "profesorNombre": request.user_firebase.get('name', ''),
@@ -693,7 +841,7 @@ class HorarioClaseView(APIView):
 
 
 # ============================================
-# HEALTH CHECK
+# HEALTH CHECK Y DEBUG
 # ============================================
 class DebugCursosView(APIView):
     """
@@ -713,21 +861,50 @@ class DebugCursosView(APIView):
                 course_id = course.id
                 course_data = course.to_dict()
                 
-                # Verificar si tiene subcolección assistances
+                # Verificar estructura simple (assistances directas)
                 assistances_ref = db.collection("courses").document(course_id).collection("assistances")
                 assistances_count = len(list(assistances_ref.stream()))
+                
+                # Verificar estructura con grupos
+                groups_ref = db.collection("courses").document(course_id).collection("groups")
+                groups = list(groups_ref.stream())
+                
+                groups_info = []
+                total_assistances_groups = 0
+                
+                if groups:
+                    for group_doc in groups:
+                        group_id = group_doc.id
+                        group_data = group_doc.to_dict()
+                        
+                        # Contar asistencias del grupo
+                        group_assistances_ref = (db.collection("courses")
+                                                .document(course_id)
+                                                .collection("groups")
+                                                .document(group_id)
+                                                .collection("assistances"))
+                        group_assistances_count = len(list(group_assistances_ref.stream()))
+                        total_assistances_groups += group_assistances_count
+                        
+                        groups_info.append({
+                            "groupId": group_id,
+                            "groupName": group_data.get('group', group_id),
+                            "assistances": group_assistances_count
+                        })
                 
                 curso_info = {
                     "id": course_id,
                     "nameCourse": course_data.get("nameCourse", "Sin nombre"),
                     "profesorID": course_data.get("profesorID", "N/A"),
-                    "tiene_assistances": assistances_count > 0,
-                    "num_assistances": assistances_count
+                    "estructura": "CON_GRUPOS" if groups else "SIMPLE",
+                    "assistances_directas": assistances_count,
+                    "grupos": groups_info,
+                    "total_assistances_grupos": total_assistances_groups
                 }
                 
                 cursos_info.append(curso_info)
                 
-                logger.info(f"📚 Curso: {curso_info['nameCourse']} - Assistances: {assistances_count}")
+                logger.info(f"📚 Curso: {curso_info['nameCourse']} - Estructura: {curso_info['estructura']}")
             
             return Response({
                 "total_cursos": len(cursos_info),
@@ -765,37 +942,12 @@ class DebugAsistenciasPublicView(APIView):
                 course_data = course.to_dict()
                 course_name = course_data.get('nameCourse', 'Sin nombre')
                 
-                logger.info(f"   📚 Procesando curso: {course_name} (ID: {course_id})")
+                logger.info(f"📚 Procesando curso: {course_name} (ID: {course_id})")
                 cursos_procesados += 1
                 
-                # Obtener la subcolección 'assistances' del curso
-                assistances_ref = db.collection("courses").document(course_id).collection("assistances")
-                assistances = assistances_ref.stream()
-                
-                asistencias_curso = 0
-                
-                for assistance_doc in assistances:
-                    fecha_id = assistance_doc.id
-                    assistance_data = assistance_doc.to_dict()
-                    
-                    for cedula, estudiante_data in assistance_data.items():
-                        if isinstance(estudiante_data, dict):
-                            asistencias_curso += 1
-                            
-                            asistencia = {
-                                'id': f"{course_id}_{fecha_id}_{cedula}",
-                                'estudiante': cedula,
-                                'asignatura': course_name,
-                                'fechaYhora': fecha_id,
-                                'estadoAsistencia': estudiante_data.get('estadoAsistencia', 'Presente'),
-                                'horaRegistro': estudiante_data.get('horaRegistro', ''),
-                                'late': estudiante_data.get('late', False),
-                                'courseId': course_id,
-                                'fechaDocId': fecha_id
-                            }
-                            asistencias_list.append(asistencia)
-                
-                logger.info(f"      ✅ {asistencias_curso} asistencias encontradas en este curso")
+                # Usar función auxiliar
+                asistencias_curso = obtener_asistencias_curso(course_id, course_data, course_name)
+                asistencias_list.extend(asistencias_curso)
             
             logger.info(f"✅ [SUCCESS] Total cursos procesados: {cursos_procesados}")
             logger.info(f"✅ [SUCCESS] Total asistencias encontradas: {len(asistencias_list)}")
@@ -816,6 +968,111 @@ class DebugAsistenciasPublicView(APIView):
             )
 
 
+class TestTokenView(APIView):
+    """
+    GET /api/test-token/
+    Endpoint de prueba para verificar el token de Firebase
+    ⚠️ TEMPORAL - Solo para debugging
+    """
+    def get(self, request):
+        try:
+            logger.info("🔐 [TEST TOKEN] Verificando token")
+            
+            # Obtener header de autorización
+            auth_header = request.headers.get('Authorization')
+            logger.info(f"📋 Authorization Header: {auth_header[:50] if auth_header else 'NO ENCONTRADO'}...")
+            
+            if not auth_header:
+                return Response({
+                    "error": "No authorization header",
+                    "headers_received": list(request.headers.keys())
+                }, status=status.HTTP_401_UNAUTHORIZED)
+            
+            # Verificar formato
+            parts = auth_header.split(' ')
+            logger.info(f"📋 Parts: {len(parts)}")
+            
+            if len(parts) != 2 or parts[0] != 'Bearer':
+                return Response({
+                    "error": "Invalid format",
+                    "expected": "Bearer <token>",
+                    "received": auth_header[:50]
+                }, status=status.HTTP_401_UNAUTHORIZED)
+            
+            id_token = parts[1]
+            logger.info(f"📋 Token length: {len(id_token)}")
+            logger.info(f"📋 Token first 20 chars: {id_token[:20]}")
+            
+            # Intentar verificar con Firebase Admin
+            from firebase_admin import auth as firebase_auth
+            
+            try:
+                decoded_token = firebase_auth.verify_id_token(id_token, check_revoked=True)
+                logger.info(f"✅ Token válido!")
+                logger.info(f"👤 User: {decoded_token.get('email')}")
+                logger.info(f"👤 UID: {decoded_token.get('uid')}")
+                
+                return Response({
+                    "success": True,
+                    "message": "Token válido",
+                    "user": {
+                        "email": decoded_token.get('email'),
+                        "uid": decoded_token.get('uid'),
+                        "name": decoded_token.get('name', 'N/A')
+                    },
+                    "token_info": {
+                        "iss": decoded_token.get('iss'),
+                        "aud": decoded_token.get('aud'),
+                        "exp": decoded_token.get('exp'),
+                        "iat": decoded_token.get('iat')
+                    }
+                }, status=status.HTTP_200_OK)
+                
+            except firebase_auth.InvalidIdTokenError as e:
+                logger.error(f"❌ Token inválido: {str(e)}")
+                return Response({
+                    "error": "Invalid token",
+                    "detail": str(e),
+                    "type": "InvalidIdTokenError"
+                }, status=status.HTTP_401_UNAUTHORIZED)
+                
+            except firebase_auth.ExpiredIdTokenError as e:
+                logger.error(f"❌ Token expirado: {str(e)}")
+                return Response({
+                    "error": "Token expired",
+                    "detail": str(e),
+                    "type": "ExpiredIdTokenError"
+                }, status=status.HTTP_401_UNAUTHORIZED)
+                
+            except firebase_auth.RevokedIdTokenError as e:
+                logger.error(f"❌ Token revocado: {str(e)}")
+                return Response({
+                    "error": "Token revoked",
+                    "detail": str(e),
+                    "type": "RevokedIdTokenError"
+                }, status=status.HTTP_401_UNAUTHORIZED)
+                
+            except Exception as e:
+                logger.error(f"❌ Error verificando token: {str(e)}")
+                logger.error(f"Tipo: {type(e).__name__}")
+                import traceback
+                logger.error(traceback.format_exc())
+                return Response({
+                    "error": "Verification error",
+                    "detail": str(e),
+                    "type": type(e).__name__
+                }, status=status.HTTP_401_UNAUTHORIZED)
+                
+        except Exception as e:
+            logger.error(f"❌ Error general: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return Response({
+                "error": "Server error",
+                "detail": str(e)
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
 class HealthCheck(APIView):
     """GET /api/health/ - Verificar estado del servidor"""
     
@@ -834,6 +1091,9 @@ class HealthCheck(APIView):
             "timestamp": datetime.now().isoformat(),
             "firebase": firebase_status,
             "endpoints": {
+                "test": {
+                    "test_token": "/api/test-token/"
+                },
                 "asistencias": {
                     "list": "/api/asistencias/",
                     "create": "/api/asistencias/crear/",
@@ -851,7 +1111,8 @@ class HealthCheck(APIView):
                     "delete_clase": "/api/horarios/clases/<clase_id>/"
                 },
                 "debug": {
-                    "cursos": "/api/debug/cursos/"
+                    "cursos": "/api/debug/cursos/",
+                    "asistencias_public": "/api/debug/asistencias/"
                 }
             }
         }, status=status.HTTP_200_OK)
