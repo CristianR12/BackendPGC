@@ -5,3 +5,5 @@
 asistenciaconreconocimiento-firebase-adminsdk.json
 
 .venv
+
+api_app/_pycache_/
