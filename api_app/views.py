@@ -31,6 +31,46 @@ def handle_firestore_error(e):
     else:
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+
+# ============================================
+# FUNCIÓN AUXILIAR PARA BUSCAR PERSONA POR UID
+# ============================================
+def buscar_persona_por_uid(uid):
+    """
+    Busca un documento en la colección 'person' donde el campo 'profesorUID' 
+    coincida con el UID proporcionado.
+    
+    Args:
+        uid (str): UID del usuario de Firebase Auth
+        
+    Returns:
+        dict | None: Datos del documento si se encuentra, None si no existe
+    """
+    try:
+        logger.info(f"🔍 Buscando persona con UID: {uid}")
+        
+        # Query a la colección 'person' buscando por el campo 'profesorUID'
+        persons_ref = db.collection('person')
+        query = persons_ref.where('profesorUID', '==', uid).limit(1)
+        docs = list(query.stream())
+        
+        if not docs:
+            logger.warning(f"⚠️ No se encontró documento en 'person' para UID: {uid}")
+            return None
+        
+        # Obtener el primer (y único) documento
+        person_doc = docs[0]
+        person_data = person_doc.to_dict()
+        person_data['id'] = person_doc.id  # Agregar el ID del documento
+        
+        logger.info(f"✅ Persona encontrada: {person_data.get('namePerson', 'Sin nombre')} (DocID: {person_doc.id})")
+        return person_data
+        
+    except Exception as e:
+        logger.error(f"❌ Error al buscar persona por UID: {str(e)}")
+        return None
+
+
 # ============================================
 # FUNCIONES AUXILIARES PARA MANEJAR AMBAS ESTRUCTURAS
 # ============================================
@@ -545,7 +585,7 @@ class AsistenciaDelete(APIView):
 
 
 # ============================================
-# HORARIOS - ENDPOINTS EXISTENTES (sin cambios)
+# HORARIOS - ENDPOINTS EXISTENTES (MODIFICADOS)
 # ============================================
 
 class HorarioProfesorView(APIView):
@@ -568,38 +608,74 @@ class HorarioProfesorView(APIView):
             logger.info("📅 [GET] /api/horarios/ - Obtener horario del profesor")
             
             user_uid = request.user_firebase.get('uid')
-            logger.info(f"👤 Profesor UID: {user_uid}")
+            logger.info(f"👤 Usuario UID: {user_uid}")
             
-            courses_ref = db.collection("courses")
-            query = courses_ref.where("profesorID", "==", user_uid)
-            docs = query.stream()
+            # 🔥 BUSCAR PERSONA POR UID (no por ID de documento)
+            person_data = buscar_persona_por_uid(user_uid)
             
-            cursos = []
-            for doc in docs:
-                curso_data = doc.to_dict()
-                curso_data['id'] = doc.id
-                cursos.append(curso_data)
-                logger.info(f"   📚 Curso encontrado: {curso_data.get('nameCourse')}")
-            
-            logger.info(f"✅ Total cursos encontrados: {len(cursos)}")
-            logger.info("=" * 60)
-            
-            if len(cursos) == 0:
+            if not person_data:
                 return Response({
+                    "error": f"No se encontró usuario en 'person' con UID: {user_uid}",
                     "profesorEmail": request.user_firebase.get('email'),
                     "profesorNombre": request.user_firebase.get('name', ''),
                     "clases": [],
-                    "message": "No hay cursos asignados"
-                }, status=status.HTTP_200_OK)
+                    "message": "Usuario no registrado en el sistema"
+                }, status=status.HTTP_404_NOT_FOUND)
+            
+            # Verificar tipo de usuario
+            user_type = person_data.get('type', '')
+            logger.info(f"👤 Tipo de usuario: {user_type}")
+            
+            if user_type == 'Profesor':
+                # PROFESOR: Buscar cursos donde profesorID == UID
+                courses_ref = db.collection("courses")
+                query = courses_ref.where("profesorID", "==", user_uid)
+                docs = query.stream()
+                
+                cursos = []
+                for doc in docs:
+                    curso_data = doc.to_dict()
+                    curso_data['id'] = doc.id
+                    cursos.append(curso_data)
+                    logger.info(f"   📚 Curso encontrado: {curso_data.get('nameCourse')}")
+                
+                logger.info(f"✅ Total cursos del profesor: {len(cursos)}")
+                
+            elif user_type == 'Estudiante':
+                # ESTUDIANTE: Buscar cursos donde estudianteID contiene el UID
+                courses_ref = db.collection("courses")
+                query = courses_ref.where("estudianteID", "array_contains", user_uid)
+                docs = query.stream()
+                
+                cursos = []
+                for doc in docs:
+                    curso_data = doc.to_dict()
+                    curso_data['id'] = doc.id
+                    cursos.append(curso_data)
+                    logger.info(f"   📚 Curso encontrado: {curso_data.get('nameCourse')}")
+                
+                logger.info(f"✅ Total cursos del estudiante: {len(cursos)}")
+                
+            else:
+                logger.warning(f"⚠️ Tipo de usuario no reconocido: {user_type}")
+                return Response({
+                    "error": f"Tipo de usuario no válido: {user_type}",
+                    "clases": []
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            logger.info("=" * 60)
             
             return Response({
                 "profesorEmail": request.user_firebase.get('email'),
-                "profesorNombre": request.user_firebase.get('name', ''),
-                "clases": cursos
+                "profesorNombre": person_data.get('namePerson', request.user_firebase.get('name', '')),
+                "clases": cursos,
+                "userType": user_type
             }, status=status.HTTP_200_OK)
             
         except Exception as e:
             logger.error(f"❌ Error al obtener horario: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
             return Response(
                 {"error": "Error al obtener horario", "detail": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
