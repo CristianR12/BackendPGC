@@ -1,6 +1,7 @@
 # ESTA ES LA BUENA
 # src/api_app/views.py - SIN VERIFICACIÓN DE TOKEN, CON FILTRADO POR UID
 from rest_framework.views import APIView
+from datetime import datetime, time, timezone, timedelta
 from rest_framework.response import Response
 from rest_framework import status, permissions
 from rest_framework.decorators import api_view, permission_classes
@@ -21,6 +22,12 @@ from datetime import datetime, time
 # Configurar logger
 logger = logging.getLogger(__name__)
 db = firestore.client()
+def obtener_fecha_colombia():
+    zona_colombia = timezone(timedelta(hours=-5))
+    ahora_colombia = datetime.now(zona_colombia)
+    fecha_str = ahora_colombia.strftime("%Y-%m-%d")
+    hora_str = ahora_colombia.strftime("%H:%M:%S")
+    return fecha_str, hora_str
 
 # ----- FUNCIONES AUXILIARES -----
 def validar_conflicto_horario(profesor_id, new_class, exclude_course_id=None, exclude_class_index=None):
