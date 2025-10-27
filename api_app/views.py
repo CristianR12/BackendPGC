@@ -194,16 +194,22 @@ def buscar_persona_por_uid(uid):
         logger.error(traceback.format_exc())
         return None
 
-def buscar_nombre_estudiante(cedula):
+def buscar_nombre_estudiante(cedula, buscar_en_db=False):
     """
     Busca el nombre de un estudiante por su cédula en la colección 'person'.
+    ✅ OPTIMIZADO: Solo busca en DB si se solicita explícitamente
 
     Args:
         cedula (str): Cédula del estudiante
+        buscar_en_db (bool): Si False, retorna solo la cédula sin buscar
         
     Returns:
-        str: Nombre del estudiante o texto genérico si no se encuentra
+        str: Nombre del estudiante, cédula, o texto genérico si no se encuentra
     """
+    # ✅ Si no se solicita búsqueda, retornar solo la cédula
+    if not buscar_en_db:
+        return str(cedula)
+    
     try:
         doc_ref = db.collection('person').document(str(cedula))
         doc = doc_ref.get()
@@ -211,16 +217,15 @@ def buscar_nombre_estudiante(cedula):
         if doc.exists:
             person_data = doc.to_dict()
             nombre = person_data.get('namePerson', f"Estudiante {cedula}")
-            print(f"✅ Nombre encontrado para {cedula}: {nombre}")
+            logger.info(f"✅ Nombre encontrado para {cedula}: {nombre}")
             return nombre
         else:
-            print(f"⚠️ No se encontró documento para cédula: {cedula}")
+            logger.warning(f"⚠️ No se encontró documento para cédula: {cedula}")
             return f"Estudiante {cedula}"
 
     except Exception as e:
-        print(f"❌ Error al buscar nombre de estudiante: {str(e)}")
+        logger.error(f"❌ Error al buscar nombre de estudiante: {str(e)}")
         return f"Estudiante {cedula}"
-
 
 # ============================================
 # FUNCIÓN PARA OBTENER CURSOS DEL PROFESOR
@@ -443,7 +448,7 @@ def obtener_asistencias_curso(course_id, course_data, course_name):
                         # Crear objeto de asistencia con información del grupo
                         asistencia = {
                             'id': f"{course_id}_{group_id}_{fecha_id}_{cedula}",
-                            'estudiante': buscar_nombre_estudiante(cedula),
+                            'estudiante': str(cedula),  # Solo cédula
                             'asignatura': f"{course_name} - Grupo {group_name}",
                             'fechaYhora': fecha_id,
                             'estadoAsistencia': estudiante_data.get('estadoAsistencia', 'Presente'),
@@ -478,7 +483,7 @@ def obtener_asistencias_curso(course_id, course_data, course_name):
                     
                     asistencia = {
                         'id': f"{course_id}_{fecha_id}_{cedula}",
-                        'estudiante': buscar_nombre_estudiante(cedula),
+                        'estudiante': str(cedula),  # Solo cédula
                         'asignatura': course_name,
                         'fechaYhora': fecha_id,
                         'estadoAsistencia': estudiante_data.get('estadoAsistencia', 'Presente'),
@@ -737,16 +742,19 @@ class AsistenciaRetrieve(APIView):
                     status=status.HTTP_404_NOT_FOUND
                 )
             
-
-# Obtener nombre del curso
+            # Obtener nombre del curso
             course_doc = db.collection("courses").document(course_id).get()
             course_name = course_doc.to_dict().get('nameCourse', 'Sin nombre') if course_doc.exists else 'Sin nombre'
             
             estudiante_data = assistance_data[cedula]
             
+            # ✅ OBTENER NOMBRE DEL ESTUDIANTE DESDE LA CÉDULA
+            nombre_estudiante = buscar_nombre_estudiante(cedula)
+            
             data = {
                 'id': pk,
-                'estudiante': cedula,
+                'estudiante': nombre_estudiante,  # ✅ NOMBRE DEL ESTUDIANTE
+                'estudianteCedula': cedula,       # ✅ CÉDULA COMO REFERENCIA
                 'asignatura': course_name,
                 'fechaYhora': fecha_id,
                 'estadoAsistencia': estudiante_data.get('estadoAsistencia', 'Presente'),
@@ -763,7 +771,6 @@ class AsistenciaRetrieve(APIView):
         except Exception as e:
             logger.error(f"❌ Error: {str(e)}")
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
 
 class AsistenciaUpdate(APIView):
     """
@@ -823,6 +830,7 @@ class AsistenciaUpdate(APIView):
             
             estudiante_data = assistance_data[cedula]
             
+            # ✅ SOLO ACTUALIZAR EL ESTADO DE ASISTENCIA
             if 'estadoAsistencia' in request.data:
                 estudiante_data['estadoAsistencia'] = request.data['estadoAsistencia']
             
@@ -833,9 +841,13 @@ class AsistenciaUpdate(APIView):
             course_doc = db.collection("courses").document(course_id).get()
             course_name = course_doc.to_dict().get('nameCourse', 'Sin nombre') if course_doc.exists else 'Sin nombre'
             
+            # ✅ OBTENER NOMBRE DEL ESTUDIANTE
+            nombre_estudiante = buscar_nombre_estudiante(cedula)
+            
             updated_data = {
                 'id': pk,
-                'estudiante': cedula,
+                'estudiante': nombre_estudiante,  # ✅ NOMBRE DEL ESTUDIANTE
+                'estudianteCedula': cedula,       # ✅ CÉDULA COMO REFERENCIA
                 'asignatura': course_name,
                 'fechaYhora': fecha_id,
                 'estadoAsistencia': estudiante_data.get('estadoAsistencia'),
@@ -851,7 +863,6 @@ class AsistenciaUpdate(APIView):
         except Exception as e:
             logger.error(f"❌ Error: {str(e)}")
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
 
 class AsistenciaDelete(APIView):
     """
@@ -1392,7 +1403,38 @@ class HorarioClaseView(APIView):
             logger.error(f"❌ Error: {str(e)}")
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+# ============================================
+# NUEVO ENDPOINT PARA BUSCAR NOMBRE DE ESTUDIANTE
+# ============================================
 
+class EstudianteNombreView(APIView):
+    """
+    GET /api/estudiantes/nombre/<cedula>/
+    Busca el nombre de un estudiante por su cédula
+    """
+    
+    def get(self, request, cedula):
+        user_uid, error = obtener_uid_usuario(request)
+        if error:
+            return error
+        
+        try:
+            logger.info(f"🔍 [GET] /api/estudiantes/nombre/{cedula}/")
+            
+            # Buscar en la base de datos
+            nombre = buscar_nombre_estudiante(cedula, buscar_en_db=True)
+            
+            return Response({
+                "cedula": cedula,
+                "nombre": nombre
+            }, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            logger.error(f"❌ Error: {str(e)}")
+            return Response(
+                {"error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 # ============================================
 # HEALTH CHECK
 # ============================================
@@ -1430,6 +1472,9 @@ class HealthCheck(APIView):
                     "add_clase": "/api/horarios/clases/",
                     "update_clase": "/api/horarios/clases/ (PUT)",
                     "delete_clase": "/api/horarios/clases/ (DELETE)"
+                },
+                "estudiantes": {  # ✅ NUEVO
+                    "get_nombre": "GET /api/estudiantes/nombre/<cedula>/"
                 }
             }
         }, status=status.HTTP_200_OK)
