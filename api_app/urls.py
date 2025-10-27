@@ -13,6 +13,7 @@ from .views import (
     HorarioClaseView,
     # Health Check
     HealthCheck,
+    EstudianteNombreView,
 )
 
 urlpatterns = [
@@ -29,6 +30,8 @@ urlpatterns = [
     path("asistencias/<str:pk>/", AsistenciaRetrieve.as_view(), name="asistencia-detail"),
     path("asistencias/<str:pk>/update/", AsistenciaUpdate.as_view(), name="asistencia-update"),
     path("asistencias/<str:pk>/delete/", AsistenciaDelete.as_view(), name="asistencia-delete"),
+    path('estudiantes/nombre/<str:cedula>/', EstudianteNombreView.as_view(), name='estudiante-nombre'),
+
     
     # ============================================
     # HORARIOS
