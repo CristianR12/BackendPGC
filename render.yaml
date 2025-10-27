@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: backend-asistencias
+    env: python
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "gunicorn api_app.wsgi:application"
+    envVars:
+      - key: GOOGLE_APPLICATION_CREDENTIALS
+        value: /etc/secrets/firebase.json
