@@ -108,3 +108,5 @@ INFO 2025-10-21 14:22:11,708 views    - Josefito perez: Tiene Excusa
 INFO 2025-10-21 14:22:11,708 views    - Cristian Rodriguez: Ausente
 INFO 2025-10-21 14:22:11,708 views    - Edward Ramirez: Presente
 INFO 2025-10-21 14:22:11,708 views ============================================================
+INFO 2025-10-27 01:37:35,056 autoreload Watching for file changes with StatReloader
+INFO 2025-10-27 01:40:27,387 autoreload D:\Archivos\Documentos\PGC\Admin\backend\api_project\settings.py changed, reloading.

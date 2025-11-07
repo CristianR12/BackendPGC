@@ -37,7 +37,7 @@ urlpatterns = [
     # HORARIOS
     # ============================================
     path("horarios/", HorarioProfesorView.as_view(), name="horario-profesor"),
-    path("horarios/cursos/<str:course_id>/", HorarioCursoView.as_view(), name="horario-curso"),
+    path("horarios/Cursos/<str:course_id>/", HorarioCursoView.as_view(), name="horario-curso"),
     path("horarios/clases/", HorarioClaseView.as_view(), name="horario-clase-create"),
     path("horarios/clases/<str:clase_id>/", HorarioClaseView.as_view(), name="horario-clase-detail"),
 ]
