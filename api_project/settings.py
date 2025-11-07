@@ -5,6 +5,7 @@ Adaptado para trabajar con Firebase + Django REST Framework
 
 from pathlib import Path
 import firebase_admin
+import os
 from firebase_admin import credentials
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
