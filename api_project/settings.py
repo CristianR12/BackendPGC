@@ -7,6 +7,10 @@ from pathlib import Path
 import firebase_admin
 import os
 from firebase_admin import credentials
+from dotenv import load_dotenv
+
+# Cargar variables de entorno
+load_dotenv()
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -14,9 +18,9 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # -------------------------
 # Seguridad
 # -------------------------
-SECRET_KEY = 'django-insecure-)%(502kzlli4p-7cvm3eenaqtn&lrqc_k52)aef764gn$zx1wr'
-DEBUG = True
-ALLOWED_HOSTS = ['*']  # Para desarrollo
+SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'django-insecure-)%(502kzlli4p-7cvm3eenaqtn&lrqc_k52)aef764gn$zx1wr')
+DEBUG = os.getenv('DJANGO_DEBUG', 'False') == 'True'
+ALLOWED_HOSTS = os.getenv('DJANGO_ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
 
 # -------------------------
 # Apps instaladas
@@ -54,8 +58,12 @@ ROOT_URLCONF = 'api_project.urls'
 # CONFIGURACIÓN DE CORS (CRÍTICO)
 # -------------------------
 
-# Permitir todos los orígenes (solo para desarrollo)
-CORS_ALLOW_ALL_ORIGINS = True
+# En desarrollo permitir todos, en producción usar lista específica
+if DEBUG:
+    CORS_ALLOW_ALL_ORIGINS = True
+else:
+    CORS_ALLOW_ALL_ORIGINS = False
+    CORS_ALLOWED_ORIGINS = os.getenv('CORS_ALLOWED_ORIGINS', '').split(',')
 
 # Permitir credenciales (cookies, auth headers)
 CORS_ALLOW_CREDENTIALS = True
@@ -71,6 +79,10 @@ CORS_ALLOW_HEADERS = [
     'user-agent',
     'x-csrftoken',
     'x-requested-with',
+    # Custom headers del frontend
+    'x-user-uid',
+    'x-user-email',
+    'x-user-name',
 ]
 
 # Métodos HTTP permitidos
@@ -147,16 +159,19 @@ USE_TZ = True
 # -------------------------
 # Archivos estáticos
 # -------------------------
-STATIC_URL = 'static/'
+STATIC_URL = '/static/'
+STATIC_ROOT = os.getenv('STATIC_ROOT', BASE_DIR / 'staticfiles')
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # -------------------------
 # Firebase Config
 # -------------------------
-cred = credentials.Certificate(
-    BASE_DIR / "CredencialesFirebase" / "asistenciaconreconocimiento-firebase-adminsdk.json"
+firebase_cred_path = os.getenv(
+    'FIREBASE_CREDENTIALS_PATH',
+    'CredencialesFirebase/asistenciaconreconocimiento-firebase-adminsdk.json'
 )
+cred = credentials.Certificate(BASE_DIR / firebase_cred_path)
 try:
     firebase_admin.get_app()
 except ValueError:
