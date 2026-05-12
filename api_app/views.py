@@ -17,7 +17,8 @@ from .serializers import (
 from firebase_admin.exceptions import FirebaseError
 from google.api_core.exceptions import PermissionDenied, NotFound
 import logging
-from datetime import datetime, time
+import unicodedata
+from django.utils import timezone as django_timezone
 
 # Configurar logger
 logger = logging.getLogger(__name__)
@@ -505,6 +506,196 @@ def obtener_asistencias_curso(course_id, course_data, course_name):
         logger.info(f"      ✅ {asistencias_curso} asistencias encontradas")
     
     return asistencias_list
+
+
+# --- Vista Inicio (U1/U2): misma ventana temporal que TrialREC/recFacial verificar_horario_salon, sin salón ---
+DIAS_INGLES_A_ESPANOL_VISTA = {
+    "Monday": "Lunes",
+    "Tuesday": "Martes",
+    "Wednesday": "Miércoles",
+    "Thursday": "Jueves",
+    "Friday": "Viernes",
+    "Saturday": "Sábado",
+    "Sunday": "Domingo",
+}
+
+# Mapa manual opcional: etiqueta normalizada (alias) → etiqueta normalizada canónica (como en asistencias)
+MANUAL_ASIGNATURA_ALIAS_A_ETIQUETA_CANONICA = {}
+
+
+def _normalizar_etiqueta_asignatura(s):
+    if s is None:
+        return ""
+    t = " ".join(str(s).strip().split())
+    t = unicodedata.normalize("NFD", t)
+    t = "".join(c for c in t if unicodedata.category(c) != "Mn")
+    return t.lower()
+
+
+def _resolver_curso_y_grupo_por_etiqueta(cursos_usuario, etiqueta_raw):
+    """
+    Devuelve (curso_dict, group_id|None) autorizado para el usuario, o (None, None).
+    Etiquetas posibles: nameCourse o f"{nameCourse} - Grupo {nombreGrupo}" como en obtener_asistencias_curso.
+    """
+    key = _normalizar_etiqueta_asignatura(etiqueta_raw)
+    key = MANUAL_ASIGNATURA_ALIAS_A_ETIQUETA_CANONICA.get(key, key)
+
+    for curso in cursos_usuario:
+        course_id = curso.get("id")
+        name = curso.get("nameCourse") or ""
+        if _normalizar_etiqueta_asignatura(name) != key:
+            continue
+        if not course_id:
+            return curso, None
+        try:
+            groups_ref = db.collection("courses").document(course_id).collection("groups")
+            if list(groups_ref.limit(1).stream()):
+                continue
+        except Exception as e:
+            logger.warning(f"⚠️ Error comprobando grupos de {course_id}: {e}")
+        return curso, None
+
+    for curso in cursos_usuario:
+        course_id = curso.get("id")
+        if not course_id:
+            continue
+        name = curso.get("nameCourse") or ""
+        try:
+            groups_ref = db.collection("courses").document(course_id).collection("groups")
+            for gdoc in groups_ref.stream():
+                group_id = gdoc.id
+                group_data = gdoc.to_dict() or {}
+                group_name = group_data.get("group", group_id)
+                label = f"{name} - Grupo {group_name}"
+                if _normalizar_etiqueta_asignatura(label) == key:
+                    return curso, group_id
+        except Exception as e:
+            logger.warning(f"⚠️ Error listando grupos de {course_id}: {e}")
+
+    return None, None
+
+
+def _schedule_curso_o_grupo(course_id, curso_dict, group_id):
+    if group_id:
+        gref = db.collection("courses").document(course_id).collection("groups").document(group_id)
+        gdoc = gref.get()
+        if gdoc.exists:
+            return (gdoc.to_dict() or {}).get("schedule", []) or []
+    return curso_dict.get("schedule", []) or []
+
+
+def _ventana_trialec_sin_salon(schedule, dia_espanol, dia_ingles, hora_actual_str):
+    """True si la hora actual cae en [iniTime-5, iniTime+30] para alguna franja del día (sin filtrar por salón)."""
+    if not schedule:
+        return False
+    for horario in schedule:
+        dia_horario = horario.get("day", "")
+        if dia_horario != dia_espanol and dia_horario != dia_ingles:
+            continue
+        hora_inicio_str = horario.get("iniTime", "00:00")
+        try:
+            hora_inicio = datetime.strptime(hora_inicio_str, "%H:%M")
+            hora_actual = datetime.strptime(hora_actual_str, "%H:%M")
+        except ValueError:
+            continue
+        ventana_inicio = hora_inicio - timedelta(minutes=5)
+        ventana_fin = hora_inicio + timedelta(minutes=30)
+        if ventana_inicio <= hora_actual <= ventana_fin:
+            return True
+    return False
+
+
+def _max_fecha_doc_ids(fechas):
+    """Última sesión: fechaDocId es id del doc en assistances (convención YYYY-MM-DD)."""
+    valid = [f for f in fechas if f]
+    if not valid:
+        return None
+    return max(valid)
+
+
+class AsistenciaVistaInicio(APIView):
+    """
+    GET /api/asistencias/vista-inicio/?asignatura=...
+    Listado filtrado para Inicio (U1 clase en ventana → sesión de hoy; U2 → última sesión por fechaDocId).
+    Misma autorización y cursos que GET /api/asistencias/.
+    """
+
+    def get(self, request):
+        user_uid, error = obtener_uid_usuario(request)
+        if error:
+            return error
+
+        etiqueta = request.query_params.get("asignatura")
+        if not etiqueta or not str(etiqueta).strip():
+            return Response(
+                {"error": "Parámetro 'asignatura' es requerido"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        etiqueta = str(etiqueta).strip()
+
+        try:
+            person_data = buscar_persona_por_uid(user_uid)
+            if not person_data:
+                return Response([], status=status.HTTP_200_OK)
+
+            user_type = person_data.get("type", "")
+            if user_type == "Profesor":
+                cursos_usuario = obtener_cursos_profesor(person_data, user_uid)
+            elif user_type == "Estudiante":
+                cursos_usuario = obtener_cursos_estudiante(person_data, user_uid)
+            else:
+                return Response(
+                    {"error": f"Tipo de usuario no válido: {user_type}"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            curso, group_id = _resolver_curso_y_grupo_por_etiqueta(cursos_usuario, etiqueta)
+            if not curso:
+                return Response(
+                    {"error": "No se encontró un curso autorizado para esa asignatura"},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
+            course_id = curso.get("id")
+            course_name = curso.get("nameCourse", "Sin nombre")
+            todas = obtener_asistencias_curso(course_id, curso, course_name)
+            nk_user = _normalizar_etiqueta_asignatura(etiqueta)
+            canon = MANUAL_ASIGNATURA_ALIAS_A_ETIQUETA_CANONICA.get(nk_user, nk_user)
+            filtro_label = [
+                a for a in todas if _normalizar_etiqueta_asignatura(a.get("asignatura")) == canon
+            ]
+            if group_id is not None:
+                filtro_label = [a for a in filtro_label if a.get("groupId") == group_id]
+
+            now_local = django_timezone.localtime(django_timezone.now())
+            dia_ingles = now_local.strftime("%A")
+            dia_espanol = DIAS_INGLES_A_ESPANOL_VISTA.get(dia_ingles, dia_ingles)
+            hora_actual_str = now_local.strftime("%H:%M")
+            schedule = _schedule_curso_o_grupo(course_id, curso, group_id)
+            en_ventana = _ventana_trialec_sin_salon(schedule, dia_espanol, dia_ingles, hora_actual_str)
+
+            if en_ventana:
+                today_str = now_local.strftime("%Y-%m-%d")
+                out = [a for a in filtro_label if (a.get("fechaDocId") or "") == today_str]
+            else:
+                fechas = [a.get("fechaDocId") for a in filtro_label]
+                ultima = _max_fecha_doc_ids(fechas)
+                if ultima is None:
+                    out = []
+                else:
+                    out = [a for a in filtro_label if (a.get("fechaDocId") or "") == ultima]
+
+            return Response(out, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            logger.error(f"❌ AsistenciaVistaInicio: {str(e)}")
+            import traceback
+
+            logger.error(traceback.format_exc())
+            return Response(
+                {"error": "Error al obtener vista inicio", "detail": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
 
 # ============================================

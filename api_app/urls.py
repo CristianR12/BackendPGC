@@ -3,6 +3,7 @@ from django.urls import path
 from .views import (
     # Asistencias
     AsistenciaList,
+    AsistenciaVistaInicio,
     AsistenciaCreate,
     AsistenciaRetrieve,
     AsistenciaUpdate,
@@ -25,6 +26,7 @@ urlpatterns = [
     # ============================================
     # ASISTENCIAS
     # ============================================
+    path("asistencias/vista-inicio/", AsistenciaVistaInicio.as_view(), name="asistencia-vista-inicio"),
     path("asistencias/", AsistenciaList.as_view(), name="asistencia-list"),
     path("asistencias/crear/", AsistenciaCreate.as_view(), name="asistencia-create"),
     path("asistencias/<str:pk>/", AsistenciaRetrieve.as_view(), name="asistencia-detail"),
