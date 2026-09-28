@@ -79,10 +79,6 @@ CORS_ALLOW_HEADERS = [
     'user-agent',
     'x-csrftoken',
     'x-requested-with',
-    # Custom headers del frontend
-    'x-user-uid',
-    'x-user-email',
-    'x-user-name',
 ]
 
 # Métodos HTTP permitidos

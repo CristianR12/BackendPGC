@@ -124,40 +124,52 @@ def handle_firestore_error(e):
 # ============================================
 def obtener_uid_usuario(request):
     """
-    Extrae el UID del usuario desde los headers personalizados
-    NO verifica token, solo extrae el UID
-    
+    Verifica el ID token de Firebase enviado en el header Authorization
+    y extrae el UID del token ya verificado (no del header, que puede
+    ser falsificado por el cliente).
+
     Returns:
         tuple: (uid, error_response)
             - Si todo OK: (uid_string, None)
             - Si error: (None, Response_con_error)
     """
+    auth_header = request.headers.get('Authorization', '')
+
+    if not auth_header.startswith('Bearer '):
+        logger.warning("⚠️ No se encontró token Bearer en el header Authorization")
+        return None, Response(
+            {"Error": "No se encontró el token de autenticación."},
+            status=status.HTTP_401_UNAUTHORIZED
+        )
+
+    id_token = auth_header.split('Bearer ', 1)[1].strip()
+
     try:
-        uid = request.headers.get('X-User-UID')
-        
-        if not uid:
-            logger.warning("⚠️ No se encontró UID en headers")
-            return None, Response(
-                {"Error": "No se encontró el UID del usuario."},
-                status=status.HTTP_401_UNAUTHORIZED
-            )
-        
-        # Guardar info del usuario en request (simulando estructura de Firebase)
-        request.user_firebase = {
-            'uid': uid,
-            'email': request.headers.get('X-User-Email', 'N/A'),
-            'name': request.headers.get('X-User-Name', 'Usuario')
-        }
-        
-        logger.info(f"✅ UID recibido: {uid}")
-        return uid, None
-        
+        decoded_token = firebase_auth.verify_id_token(id_token)
+    except FirebaseError as e:
+        logger.warning(f"⚠️ Token inválido o expirado: {str(e)}")
+        return None, Response(
+            {"Error": "Token de autenticación inválido o expirado."},
+            status=status.HTTP_401_UNAUTHORIZED
+        )
     except Exception as e:
-        logger.error(f"❌ Error al extraer UID: {str(e)}")
+        logger.error(f"❌ Error al verificar token: {str(e)}")
         return None, Response(
             {"Error": "Error al procesar usuario"},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+    uid = decoded_token['uid']
+
+    # Guardar info del usuario verificada (nunca desde headers del cliente)
+    request.user_firebase = {
+        'uid': uid,
+        'email': decoded_token.get('email', 'N/A'),
+        'name': decoded_token.get('name', 'Usuario')
+    }
+
+    logger.info(f"✅ Token verificado para UID: {uid}")
+    return uid, None
 
 
 # ============================================
@@ -1652,7 +1664,7 @@ class HealthCheck(APIView):
             "status": "OK",
             "timestamp": datetime.now().isoformat(),
             "firebase": firebase_status,
-            "authentication": "UID-based (no token verification)",
+            "authentication": "Firebase ID token (Bearer, verified server-side)",
             "endpoints": {
                 "asistencias": {
                     "list": "GET /api/asistencias/",
