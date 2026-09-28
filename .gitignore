@@ -7,3 +7,9 @@ asistenciaconreconocimiento-firebase-adminsdk.json
 .venv
 
 **/__pycache__/
+
+# variables de entorno locales (secretos, no versionar)
+.env
+
+# logs locales (pueden contener datos de estudiantes)
+*.log

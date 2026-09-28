@@ -9,7 +9,6 @@ cryptography==46.0.3
 Django==5.2.7
 django-cors-headers==4.9.0
 djangorestframework==3.16.1
-firebase==4.0.1
 firebase_admin==7.1.0
 google-api-core==2.26.0
 google-auth==2.41.1
@@ -31,6 +30,7 @@ idna==3.11
 msgpack==1.1.2
 proto-plus==1.26.1
 protobuf==6.33.0
+python-dotenv==1.1.0
 pyasn1==0.6.1
 pyasn1_modules==0.4.2
 pycparser==2.23
