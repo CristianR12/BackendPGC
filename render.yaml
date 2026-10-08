@@ -3,10 +3,15 @@ services:
     name: backend-asistencias
     runtime: python
     plan: free
+    # Render responde 200 aquí para saber que el servicio está sano (y despertarlo si estaba dormido)
+    healthCheckPath: /api/health/
     buildCommand: pip install -r requirements.txt
     # 1 worker + hilos: el plan gratis tiene 512 MB de RAM
     startCommand: gunicorn api_project.wsgi:application --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 120
     envVars:
+      # Versión completa de Python (la misma con la que se probó)
+      - key: PYTHON_VERSION
+        value: 3.12.13
       - key: DJANGO_DEBUG
         value: "False"
       - key: DJANGO_SECRET_KEY

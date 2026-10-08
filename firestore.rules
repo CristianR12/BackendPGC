@@ -1,0 +1,18 @@
+rules_version = '2';
+
+// Reglas de Firestore del Sistema de Asistencias.
+//
+// TODO el acceso a los datos pasa por el backend (Django con el SDK de administrador de Firebase), que
+// valida la sesión y los permisos por rol y por curso en cada petición. El SDK de administrador NO está sujeto
+// a estas reglas. Por eso desde el navegador no se permite leer ni escribir nada: así nadie puede saltarse
+// el backend con las llaves públicas de Firebase que van en el frontend.
+//
+// Si algún componente externo (por ejemplo el módulo de reconocimiento facial) usara el SDK de cliente en lugar
+// del de administrador, habría que abrirle reglas específicas aquí antes de desplegar.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

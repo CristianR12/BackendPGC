@@ -183,6 +183,16 @@ STATIC_ROOT = os.getenv('STATIC_ROOT', BASE_DIR / 'staticfiles')
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # -------------------------
+# Producción detrás del proxy de Render (HTTPS lo termina Render)
+# -------------------------
+if not DEBUG:
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_CONTENT_TYPE_NOSNIFF = True
+    SECURE_REFERRER_POLICY = 'same-origin'
+
+# -------------------------
 # Firebase Config
 # -------------------------
 # Dos formas de entregar las credenciales (la primera tiene prioridad):
