@@ -4,8 +4,10 @@ Adaptado para trabajar con Firebase + Django REST Framework
 """
 
 from pathlib import Path
+import json
 import firebase_admin
 import os
+from django.core.exceptions import ImproperlyConfigured
 from firebase_admin import credentials
 from dotenv import load_dotenv
 
@@ -18,9 +20,29 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # -------------------------
 # Seguridad
 # -------------------------
-SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'django-insecure-)%(502kzlli4p-7cvm3eenaqtn&lrqc_k52)aef764gn$zx1wr')
 DEBUG = os.getenv('DJANGO_DEBUG', 'False') == 'True'
-ALLOWED_HOSTS = os.getenv('DJANGO_ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
+
+SECRET_KEY = os.getenv('DJANGO_SECRET_KEY')
+if not SECRET_KEY:
+    if DEBUG:
+        SECRET_KEY = 'solo-para-desarrollo-local-no-usar-en-produccion'
+    else:
+        raise ImproperlyConfigured('Falta la variable de entorno DJANGO_SECRET_KEY.')
+
+ALLOWED_HOSTS = [h.strip() for h in os.getenv('DJANGO_ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',') if h.strip()]
+# Render define esta variable con el dominio público del servicio (xxx.onrender.com)
+_render_host = os.getenv('RENDER_EXTERNAL_HOSTNAME')
+if _render_host and _render_host not in ALLOWED_HOSTS:
+    ALLOWED_HOSTS.append(_render_host)
+
+# -------------------------
+# Registro de docentes
+# -------------------------
+# Administradores (correos separados por coma): aprueban solicitudes y autorizan docentes. Siempre
+# deben tener el correo verificado. Se define solo aquí, nunca desde la base de datos ni el navegador.
+ADMIN_EMAILS = {e.strip().lower() for e in os.getenv('ADMIN_EMAILS', '').split(',') if e.strip()}
+# Dominios que pueden registrarse (los administradores quedan exentos)
+REGISTRO_DOMINIOS = [d.strip().lower().lstrip('@') for d in os.getenv('REGISTRO_DOMINIOS', 'ucundinamarca.edu.co').split(',') if d.strip()]
 
 # -------------------------
 # Apps instaladas
@@ -63,7 +85,7 @@ if DEBUG:
     CORS_ALLOW_ALL_ORIGINS = True
 else:
     CORS_ALLOW_ALL_ORIGINS = False
-    CORS_ALLOWED_ORIGINS = os.getenv('CORS_ALLOWED_ORIGINS', '').split(',')
+    CORS_ALLOWED_ORIGINS = [o.strip() for o in os.getenv('CORS_ALLOWED_ORIGINS', '').split(',') if o.strip()]
 
 # Permitir credenciales (cookies, auth headers)
 CORS_ALLOW_CREDENTIALS = True
@@ -163,11 +185,24 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # -------------------------
 # Firebase Config
 # -------------------------
-firebase_cred_path = os.getenv(
-    'FIREBASE_CREDENTIALS_PATH',
-    'CredencialesFirebase/asistenciaconreconocimiento-firebase-adminsdk.json'
-)
-cred = credentials.Certificate(BASE_DIR / firebase_cred_path)
+# Dos formas de entregar las credenciales (la primera tiene prioridad):
+#   FIREBASE_CREDENTIALS_JSON  -> contenido completo del JSON (ideal en Render, sin archivos)
+#   FIREBASE_CREDENTIALS_PATH  -> ruta al archivo JSON (desarrollo local)
+firebase_cred_json = os.getenv('FIREBASE_CREDENTIALS_JSON')
+if firebase_cred_json:
+    cred = credentials.Certificate(json.loads(firebase_cred_json))
+else:
+    firebase_cred_path = os.getenv(
+        'FIREBASE_CREDENTIALS_PATH',
+        'CredencialesFirebase/asistenciaconreconocimiento-firebase-adminsdk.json'
+    )
+    cred_file = BASE_DIR / firebase_cred_path
+    if not cred_file.exists():
+        raise ImproperlyConfigured(
+            f'No se encontraron las credenciales de Firebase en {cred_file}. '
+            'Define FIREBASE_CREDENTIALS_JSON o FIREBASE_CREDENTIALS_PATH.'
+        )
+    cred = credentials.Certificate(cred_file)
 try:
     firebase_admin.get_app()
 except ValueError:

@@ -1,9 +1,24 @@
 services:
   - type: web
     name: backend-asistencias
-    env: python
-    buildCommand: "pip install -r requirements.txt"
-    startCommand: "gunicorn api_app.wsgi:application"
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    # 1 worker + hilos: el plan gratis tiene 512 MB de RAM
+    startCommand: gunicorn api_project.wsgi:application --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 120
     envVars:
-      - key: GOOGLE_APPLICATION_CREDENTIALS
-        value: /etc/secrets/firebase.json
+      - key: DJANGO_DEBUG
+        value: "False"
+      - key: DJANGO_SECRET_KEY
+        generateValue: true
+      # Dominio de Netlify, ej: https://mi-sitio.netlify.app (varios separados por coma)
+      - key: CORS_ALLOWED_ORIGINS
+        sync: false
+      # Contenido completo del JSON de credenciales de Firebase (se pega en el panel de Render)
+      - key: FIREBASE_CREDENTIALS_JSON
+        sync: false
+      # Correos de los administradores que aprueban docentes (separados por coma)
+      - key: ADMIN_EMAILS
+        sync: false
+      - key: REGISTRO_DOMINIOS
+        value: ucundinamarca.edu.co

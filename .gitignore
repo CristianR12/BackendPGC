@@ -13,3 +13,6 @@ asistenciaconreconocimiento-firebase-adminsdk.json
 
 # logs locales (pueden contener datos de estudiantes)
 *.log
+
+# archivos estáticos generados
+staticfiles/
