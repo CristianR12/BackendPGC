@@ -2972,7 +2972,7 @@ class LegalAceptacionView(APIView):
     """
     GET  /api/legal/aceptacion/   ¿La cuenta aceptó la versión vigente? Devuelve también lo que aceptó.
     POST /api/legal/aceptacion/   Body: {terminos: true, datosPersonales: true, biometrico?: bool}
-    Se guarda en la persona y, como constancia que no se sobrescribe, en `aceptacionesLegales`.
+    Se guarda en la persona y, como constancia que no se sobrescribe, en person/{cédula}/aceptacionesLegales.
     """
 
     def get(self, request):
@@ -3001,10 +3001,10 @@ class LegalAceptacionView(APIView):
             if errores:
                 return Response({"error": errores[0], "details": errores}, status=status.HTTP_400_BAD_REQUEST)
             aceptacion = legal.construir_aceptacion(datos['biometrico'], momento=django_timezone.localtime(django_timezone.now()))
-            db.collection("person").document(persona['id']).update({"aceptacionLegal": aceptacion})
-            db.collection("aceptacionesLegales").document().set({
-                **aceptacion, "evento": "aceptacion", "uid": user_uid, "cedula": persona['id'],
-                "nombre": persona.get('namePerson', ''), "rol": persona.get('type'),
+            ref_persona = db.collection("person").document(persona['id'])
+            ref_persona.update({"aceptacionLegal": aceptacion})
+            ref_persona.collection("aceptacionesLegales").document().set({
+                **aceptacion, "evento": "aceptacion", "uid": user_uid,
             })
             return Response({"version": legal.VERSION, "vigente": True, "aceptacion": aceptacion, "aplica": True}, status=status.HTTP_200_OK)
         except Exception as e:
@@ -3032,11 +3032,11 @@ class LegalBiometricoView(APIView):
             if aceptacion.get('biometrico') == autoriza:
                 return Response({"aceptacion": aceptacion}, status=status.HTTP_200_OK)
             aceptacion['biometrico'] = autoriza
-            db.collection("person").document(persona['id']).update({"aceptacionLegal": aceptacion})
-            db.collection("aceptacionesLegales").document().set({
+            ref_persona = db.collection("person").document(persona['id'])
+            ref_persona.update({"aceptacionLegal": aceptacion})
+            ref_persona.collection("aceptacionesLegales").document().set({
                 **aceptacion, "evento": "biometrico_otorgado" if autoriza else "biometrico_revocado",
-                "fecha": _ahora_iso(), "uid": user_uid, "cedula": persona['id'],
-                "nombre": persona.get('namePerson', ''), "rol": persona.get('type'),
+                "fecha": _ahora_iso(), "uid": user_uid,
             })
             return Response({"aceptacion": aceptacion}, status=status.HTTP_200_OK)
         except Exception as e:
@@ -3181,9 +3181,15 @@ class AdminLegalView(APIView):
         if error:
             return error
         try:
-            acept = db.collection("aceptacionesLegales").order_by("fecha", direction=firestore.Query.DESCENDING).limit(100).stream()
-            claves = ('evento', 'version', 'fecha', 'cedula', 'nombre', 'rol', 'biometrico')
-            aceptaciones = [{k: d.to_dict().get(k) for k in claves} for d in acept]
+            # Subcolección person/{cédula}/aceptacionesLegales: una consulta "collection group" junta las de todas
+            # las personas. No guarda cédula, nombre ni rol (quedarían duplicados de `person`): la cédula se lee
+            # de la ruta del documento, y el nombre y el rol se traen en un solo lote con las cédulas que salgan.
+            acept = list(db.collection_group("aceptacionesLegales").order_by("fecha", direction=firestore.Query.DESCENDING).limit(100).stream())
+            claves = ('evento', 'version', 'fecha', 'biometrico', 'datosPersonales', 'uid')
+            crudas = [{**{k: d.to_dict().get(k) for k in claves}, 'cedula': d.reference.path.split('/')[-3]} for d in acept]
+            personas = _leer_personas(f['cedula'] for f in crudas)
+            aceptaciones = [{**f, 'nombre': personas.get(f['cedula'], {}).get('namePerson', ''),
+                              'rol': personas.get(f['cedula'], {}).get('type')} for f in crudas]
             sol = [{**{k: d.to_dict().get(k) for k in ('tipo', 'detalle', 'estado', 'fecha', 'cedula', 'nombre', 'rol', 'email', 'respuesta')}, 'id': d.id}
                    for d in db.collection("solicitudesDatos").stream()]
             sol.sort(key=lambda f: (f.get('estado') != 'pendiente', f.get('fecha') or ''), reverse=False)

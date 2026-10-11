@@ -1074,6 +1074,10 @@ class FakeDoc:
     def reference(self):
         return self
 
+    @property
+    def path(self):
+        return f"{self.col}/{self.id}"
+
     def collection(self, name):
         return FakeCol(self.fs, f"{self.col}/{self.id}/{name}")
 
@@ -1107,8 +1111,8 @@ class FakeDoc:
 
 
 class FakeCol:
-    def __init__(self, fs, name):
-        self.fs, self.name = fs, name
+    def __init__(self, fs, name, grupo=False):
+        self.fs, self.name, self.grupo = fs, name, grupo
 
     def document(self, key=None):
         if key is None:
@@ -1117,7 +1121,10 @@ class FakeCol:
         return FakeDoc(self.fs, self.name, key)
 
     def stream(self):
-        docs = [FakeDoc(self.fs, c, k) for (c, k) in list(self.fs.datos) if c == self.name]
+        # En modo "collection group" (self.grupo) junta la subcolección homónima de cualquier documento padre,
+        # comparando solo el último tramo de la ruta (p. ej. person/123/aceptacionesLegales).
+        coincide = (lambda c: c.split('/')[-1] == self.name) if self.grupo else (lambda c: c == self.name)
+        docs = [FakeDoc(self.fs, c, k) for (c, k) in list(self.fs.datos) if coincide(c)]
         f = getattr(self, '_filtro', None)
         if f is not None:
             docs = [d for d in docs if d.to_dict().get(f.field_path) == f.value]
@@ -1165,6 +1172,12 @@ class FakeFirestore:
 
     def collection(self, name):
         return FakeCol(self, name)
+
+    def collection_group(self, name):
+        return FakeCol(self, name, grupo=True)
+
+    def get_all(self, refs):
+        return [r.get() for r in refs]
 
     def batch(self):
         return FakeBatch(self)
@@ -2349,8 +2362,8 @@ class VistasLegalTests(VistasEstudianteTests):
         self.assertEqual(r.status_code, 200)
         guardada = self.fs.datos[('person', '1000001')]['aceptacionLegal']
         self.assertEqual((guardada['version'], guardada['biometrico']), (lg.VERSION, False))
-        constancias = [v for (c, _), v in self.fs.datos.items() if c == 'aceptacionesLegales']
-        self.assertEqual([(c['evento'], c['cedula']) for c in constancias], [('aceptacion', '1000001')])
+        constancias = [(c.split('/')[-2], v) for (c, _), v in self.fs.datos.items() if c.endswith('/aceptacionesLegales')]
+        self.assertEqual([(v['evento'], cedula) for cedula, v in constancias], [('aceptacion', '1000001')])
 
     def test_no_se_puede_aceptar_a_medias(self):
         self.montar()
@@ -2376,7 +2389,7 @@ class VistasLegalTests(VistasEstudianteTests):
         self.como_persona('uid_eva', persona)
         self.client.post('/api/legal/biometrico/', {'autoriza': False}, format='json')
         self.assertFalse(self.fs.datos[('person', '1000001')]['aceptacionLegal']['biometrico'])
-        eventos = sorted(v['evento'] for (c, _), v in self.fs.datos.items() if c == 'aceptacionesLegales')
+        eventos = sorted(v['evento'] for (c, _), v in self.fs.datos.items() if c.endswith('/aceptacionesLegales'))
         self.assertEqual(eventos, ['aceptacion', 'biometrico_otorgado', 'biometrico_revocado'])
         self.assertEqual(self.client.post('/api/legal/biometrico/', {'autoriza': 'si'}, format='json').status_code, 400)
 
