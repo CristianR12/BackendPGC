@@ -27,3 +27,6 @@ services:
         sync: false
       - key: REGISTRO_DOMINIOS
         value: ucundinamarca.edu.co
+      # Horas desde que alguien inicia sesión hasta que el servidor le exige hacerlo de nuevo
+      - key: SESSION_MAX_HORAS
+        value: "8"

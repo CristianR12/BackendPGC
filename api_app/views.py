@@ -307,6 +307,19 @@ def obtener_uid_usuario(request):
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
+    # `auth_time` es cuándo esa persona inició sesión por primera vez (no cambia aunque el token se
+    # renueve solo en segundo plano). Pasadas SESSION_MAX_HORAS, se exige iniciar sesión de nuevo: sin
+    # este tope, una sesión abierta en el navegador nunca expiraría por sí sola.
+    auth_time = decoded_token.get('auth_time')
+    if auth_time is not None:
+        antiguedad_segundos = datetime.now(timezone.utc).timestamp() - auth_time
+        if antiguedad_segundos > settings.SESSION_MAX_HORAS * 3600:
+            logger.info(f"Sesión vencida (inició hace {antiguedad_segundos / 3600:.1f}h) para UID: {decoded_token['uid']}")
+            return None, Response(
+                {"Error": "Tu sesión expiró por seguridad. Inicia sesión de nuevo.", "codigo": "sesion_expirada"},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+
     uid = decoded_token['uid']
 
     # Guardar info del usuario verificada (nunca desde headers del cliente)

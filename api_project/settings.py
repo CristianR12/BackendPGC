@@ -45,6 +45,14 @@ ADMIN_EMAILS = {e.strip().lower() for e in os.getenv('ADMIN_EMAILS', '').split('
 REGISTRO_DOMINIOS = [d.strip().lower().lstrip('@') for d in os.getenv('REGISTRO_DOMINIOS', 'ucundinamarca.edu.co').split(',') if d.strip()]
 
 # -------------------------
+# Duración máxima de la sesión
+# -------------------------
+# El SDK de Firebase renueva el token solo mientras la pestaña siga abierta, así que una sesión nunca
+# expiraría por sí sola. Por eso el servidor exige volver a iniciar sesión pasadas estas horas desde el
+# inicio de sesión original (el campo `auth_time` del token, que no cambia aunque el token se renueve).
+SESSION_MAX_HORAS = int(os.getenv('SESSION_MAX_HORAS', '8'))
+
+# -------------------------
 # Apps instaladas
 # -------------------------
 INSTALLED_APPS = [

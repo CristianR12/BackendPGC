@@ -1,4 +1,4 @@
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, RequestFactory
 
 from .horario_unidades import id_unidad
 from .horario_import import (
@@ -2418,3 +2418,40 @@ class VistasLegalTests(VistasEstudianteTests):
         self.montar()
         self.como_persona('uid_eva', ESTUDIANTE)
         self.assertEqual(self.client.get('/api/admin/legal/').status_code, 403)
+
+
+# ============================================
+# DURACIÓN MÁXIMA DE LA SESIÓN
+# ============================================
+# A diferencia de las demás pruebas de vistas, estas SÍ pasan por obtener_uid_usuario de verdad (las otras
+# lo reemplazan con un doble para simular al usuario), porque es justo la función que hay que probar.
+from datetime import timedelta, timezone
+from .views import obtener_uid_usuario
+
+
+@override_settings(SESSION_MAX_HORAS=8)
+class SesionMaximaTests(SimpleTestCase):
+    def pedir(self, auth_time):
+        request = RequestFactory().get('/api/registro/', HTTP_AUTHORIZATION='Bearer token-falso')
+        ahora = datetime.now(timezone.utc).timestamp()
+        with patch('api_app.views.firebase_auth.verify_id_token', return_value={'uid': 'u1', 'auth_time': ahora - auth_time}):
+            return obtener_uid_usuario(request)
+
+    def test_sesion_reciente_pasa(self):
+        uid, error = self.pedir(timedelta(hours=1).total_seconds())
+        self.assertEqual((uid, error), ('u1', None))
+
+    def test_sesion_pasado_el_tope_se_rechaza(self):
+        uid, error = self.pedir(timedelta(hours=9).total_seconds())
+        self.assertIsNone(uid)
+        self.assertEqual(error.status_code, 401)
+        self.assertEqual(error.data.get('codigo'), 'sesion_expirada')
+
+    def test_justo_en_el_limite_todavia_pasa(self):
+        uid, error = self.pedir(timedelta(hours=8).total_seconds() - 1)
+        self.assertEqual((uid, error), ('u1', None))
+
+    def test_token_sin_auth_time_no_se_rechaza_por_esto(self):
+        request = RequestFactory().get('/api/registro/', HTTP_AUTHORIZATION='Bearer token-falso')
+        with patch('api_app.views.firebase_auth.verify_id_token', return_value={'uid': 'u1'}):
+            self.assertEqual(obtener_uid_usuario(request), ('u1', None))
