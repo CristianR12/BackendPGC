@@ -130,6 +130,57 @@ def listar_unidades_horario(uid, person_data):
     return unidades
 
 
+def listar_todas_unidades():
+    """
+    Todas las unidades de horario del sistema (cursos y subgrupos de cualquier profesor), con la misma forma
+    que listar_unidades_horario. Es la versión "global" que usa el panel de administración para buscar
+    asistencias sin quedar limitado a los cursos de una sola cuenta.
+    """
+    unidades = []
+    for d in db.collection("courses").stream():
+        c = d.to_dict() or {}
+        grupos = list(d.reference.collection("groups").stream())
+        if c.get('group') or c.get('schedule') or not grupos:
+            unidades.append({
+                'id': d.id, 'courseId': d.id, 'groupId': None,
+                'nameCourse': c.get('nameCourse'), 'group': c.get('group'),
+                'profesorID': c.get('profesorID'), 'estudianteID': c.get('estudianteID') or [],
+                'schedule': list(c.get('schedule') or []), 'codigo': c.get('codigo') or '',
+            })
+        for g in grupos:
+            gd = g.to_dict() or {}
+            unidades.append({
+                'id': id_unidad(d.id, g.id), 'courseId': d.id, 'groupId': g.id,
+                'nameCourse': c.get('nameCourse'), 'group': gd.get('group', g.id),
+                'profesorID': gd.get('profesorID'), 'estudianteID': gd.get('estudianteID') or [],
+                'schedule': list(gd.get('schedule') or []), 'codigo': c.get('codigo') or '',
+            })
+    return unidades
+
+
+def obtener_todos_los_cursos():
+    """Documentos de 'courses' (solo el curso principal, no sus subgrupos), con 'id'. Para el panel admin."""
+    return [{**(d.to_dict() or {}), 'id': d.id} for d in db.collection("courses").stream()]
+
+
+def _mapa_docentes():
+    """
+    {clave: {cedula, nombre}} de todos los profesores, indexado tanto por su UID de sesión (profesorUID)
+    como por la cédula (id del documento person), porque 'profesorID' en un curso a veces es lo uno y a
+    veces lo otro (ver _ids_del_profesor). Para el panel admin, que necesita el nombre de cualquier docente.
+    """
+    mapa = {}
+    for d in db.collection("person").stream():
+        p = d.to_dict() or {}
+        if p.get('type') != 'Profesor':
+            continue
+        info = {'cedula': d.id, 'nombre': p.get('namePerson', '')}
+        mapa[d.id] = info
+        if p.get('profesorUID'):
+            mapa[p['profesorUID']] = info
+    return mapa
+
+
 def resumen_unidad(unidad_id, data):
     """resumen_curso con nombre y grupo, aunque 'data' sea de un subgrupo (no trae el nombre del curso)."""
     curso_id, grupo_id = separar_id_unidad(unidad_id)
@@ -622,7 +673,8 @@ def obtener_asistencias_curso(course_id, course_data, course_name):
                             'courseId': course_id,
                             'groupId': group_id,
                             'fechaDocId': fecha_id,
-                            'hasGroups': True  # Flag para identificar estructura
+                            'hasGroups': True,  # Flag para identificar estructura
+                            'profesorID': group_data.get('profesorID'),
                         }
                         asistencias_list.append(asistencia)
             
@@ -656,7 +708,8 @@ def obtener_asistencias_curso(course_id, course_data, course_name):
                         'late': estudiante_data.get('late', False),
                         'courseId': course_id,
                         'fechaDocId': fecha_id,
-                        'hasGroups': False
+                        'hasGroups': False,
+                        'profesorID': course_data.get('profesorID'),
                     }
                     asistencias_list.append(asistencia)
         
@@ -1062,9 +1115,17 @@ class AsistenciaReporteView(APIView):
         if fecha and not pagina_asist.fecha_valida(fecha):
             return Response({"error": "Fecha inválida."}, status=status.HTTP_400_BAD_REQUEST)
         try:
-            person, doc, error = _unidad_para_asistencias(user_uid, unidad_id)
-            if error:
-                return error
+            es_admin = _email_y_admin(request)[2]
+            if es_admin:
+                # El admin puede pedir el reporte de cualquier curso del sistema, no solo de los suyos
+                doc = ref_unidad(unidad_id).get()
+                if not doc.exists:
+                    return Response({"error": "Curso no encontrado."}, status=status.HTTP_404_NOT_FOUND)
+                person = {}
+            else:
+                person, doc, error = _unidad_para_asistencias(user_uid, unidad_id)
+                if error:
+                    return error
             curso_id, grupo_id = separar_id_unidad(unidad_id)
             unidad = doc.to_dict() or {}
             schedule = list(unidad.get("schedule") or [])
@@ -1107,6 +1168,10 @@ class AsistenciaReporteView(APIView):
             grupo = unidad.get("group", grupo_id) if grupo_id else unidad.get("group")
             docente = person.get("namePerson", "") if person.get("type") == "Profesor" else ""
             docente_id = person.get("id", "") if person.get("type") == "Profesor" else ""
+            if es_admin:
+                # El admin no es el docente del curso: su nombre sale del dueño real de la unidad
+                info_docente = _mapa_docentes().get(unidad.get('profesorID')) or {}
+                docente, docente_id = info_docente.get('nombre', ''), info_docente.get('cedula', '')
             return Response({
                 "unidad": {"id": unidad_id, "courseId": curso_id, "nameCourse": nombre_curso, "group": grupo,
                            "docente": docente, "docenteId": docente_id},
@@ -2316,6 +2381,7 @@ def _aplicar_plan_importacion(plan, user_uid, person, cursos_actuales, periodo, 
                 "profesorID": user_uid,
                 "estudianteID": [],
                 "schedule": p['resultado'],
+                "codigo": codigo or '',
             })
             creados.append({"id": ref.id, "nameCourse": p['nameCourse'], "group": p['group']})
             ids_creados[(p['nameCourse'], p['group'])] = ref.id
@@ -3314,6 +3380,103 @@ class AdminAutorizadoDetalleView(APIView):
         except Exception as e:
             logger.error(f"Error al quitar autorización: {e}")
             return Response({"error": "Error al quitar la autorización."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+def _filas_asistencias_admin(q):
+    """
+    Lee las asistencias de TODOS los cursos y les agrega unidadId/docenteId/docente, y aplica los filtros de
+    query params (curso=<unidadId>, docente=<cédula>, fecha=AAAA-MM-DD, estado, q=texto). La usan el buscador
+    y el reporte en CSV del panel admin para no repetir la misma lógica dos veces.
+    Devuelve (filas, error); error es una Response cuando algún filtro no es válido.
+    """
+    curso = str(q.get("curso") or "").strip() or None
+    docente = str(q.get("docente") or "").strip() or None
+    fecha = str(q.get("fecha") or "").strip() or None
+    estado = str(q.get("estado") or "").strip() or None
+    texto = str(q.get("q") or "").strip()[:80] or None
+    if fecha and not pagina_asist.fecha_valida(fecha):
+        return None, Response({"error": "Fecha inválida."}, status=status.HTTP_400_BAD_REQUEST)
+    if estado and estado not in pagina_asist.ESTADOS:
+        return None, Response({"error": "Estado inválido."}, status=status.HTTP_400_BAD_REQUEST)
+
+    docentes_mapa = _mapa_docentes()
+    filas = []
+    for curso_doc in obtener_todos_los_cursos():
+        filas.extend(obtener_asistencias_curso(curso_doc['id'], curso_doc, curso_doc.get('nameCourse', 'Sin nombre')))
+    for f in filas:
+        f['unidadId'] = id_unidad(f['courseId'], f.get('groupId'))
+        info = docentes_mapa.get(f.get('profesorID')) or {}
+        f['docenteId'] = info.get('cedula', '')
+        f['docente'] = info.get('nombre', '')
+
+    if curso:
+        filas = [f for f in filas if f['unidadId'] == curso]
+    if docente:
+        filas = [f for f in filas if f['docenteId'] == docente]
+    if fecha:
+        filas = [f for f in filas if f['fechaDocId'] == fecha]
+    if estado:
+        filas = [f for f in filas if f['estadoAsistencia'] == estado]
+    if texto:
+        nombres = {c: buscar_nombre_estudiante(c, buscar_en_db=True) for c in {f['estudiante'] for f in filas}}
+        buscado = texto.lower()
+        filas = [f for f in filas if buscado in f['estudiante'].lower() or buscado in nombres.get(f['estudiante'], '').lower()]
+    return filas, None
+
+
+class AdminAsistenciasFiltrosView(APIView):
+    """
+    GET /api/admin/asistencias/filtros/  Para el buscador: la lista de docentes, y las unidades (cursos y
+    subgrupos) con la misma forma que GET /api/horarios/ (id, nameCourse, group, schedule...), para que el
+    front pueda alimentar con ellas el mismo "Generar reporte" que usan los demás roles.
+    """
+
+    def get(self, request):
+        _, error = _exigir_admin(request)
+        if error:
+            return error
+        try:
+            docentes_mapa = _mapa_docentes()
+            cursos = sorted(listar_todas_unidades(), key=lambda u: ((u.get('nameCourse') or '').lower(), str(u.get('group') or '')))
+            docentes = sorted({(v['cedula'], v['nombre']) for v in docentes_mapa.values()}, key=lambda d: d[1].lower())
+            return Response({
+                "cursos": cursos,
+                "docentes": [{"cedula": c, "nombre": n} for c, n in docentes],
+            }, status=status.HTTP_200_OK)
+        except Exception as e:
+            logger.error(f"AdminAsistenciasFiltrosView: {e}")
+            return Response({"error": "Error al cargar los filtros."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class AdminAsistenciasView(APIView):
+    """
+    GET /api/admin/asistencias/?page=1&size=10[&curso=<unidadId>][&docente=<cédula>][&fecha=AAAA-MM-DD][&estado=..][&q=..]
+    Buscador de asistencias de todo el sistema para el panel de administración: filtra por curso, docente,
+    fecha, estado o texto, y trae el resumen de lo que coincide con los filtros (igual que en Inicio).
+    """
+
+    def get(self, request):
+        _, error = _exigir_admin(request)
+        if error:
+            return error
+        q = request.query_params
+        pagina = pagina_asist.numero_positivo(q.get("page"), 1)
+        tamano = pagina_asist.numero_positivo(q.get("size"), pagina_asist.TAMANO_POR_DEFECTO, pagina_asist.TAMANO_MAXIMO)
+        try:
+            filas, error = _filas_asistencias_admin(q)
+            if error:
+                return error
+            filtradas = pagina_asist.ordenar_recientes(filas)
+            items, pagina, total_paginas = pagina_asist.paginar(filtradas, pagina, tamano)
+            nombres = {f['estudiante']: buscar_nombre_estudiante(f['estudiante'], buscar_en_db=True) for f in items}
+            return Response({
+                "filas": items, "page": pagina, "size": tamano, "totalPaginas": total_paginas,
+                "totalGeneral": len(filtradas), "resumen": pagina_asist.resumen(filtradas),
+                "nombres": nombres,
+            }, status=status.HTTP_200_OK)
+        except Exception as e:
+            logger.error(f"AdminAsistenciasView: {e}")
+            return Response({"error": "Error al obtener las asistencias."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 # ============================================

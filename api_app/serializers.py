@@ -102,6 +102,7 @@ class CourseSerializer(serializers.Serializer):
     nameCourse = serializers.CharField(max_length=200)
     group = serializers.CharField(max_length=100)
     profesorID = serializers.CharField(max_length=100)
+    codigo = serializers.CharField(max_length=40, required=False, allow_blank=True, default='')
     estudianteID = serializers.ListField(
         child=serializers.CharField(max_length=100),
         required=False,

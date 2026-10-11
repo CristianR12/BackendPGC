@@ -1817,6 +1817,96 @@ class VistasEstudianteTests(MontajeVistas):
 
 
 # ============================================
+# BUSCADOR DE ASISTENCIAS DEL PANEL ADMIN
+# ============================================
+
+@override_settings(ADMIN_EMAILS={ADMIN}, REGISTRO_DOMINIOS=['ucundinamarca.edu.co'])
+class AdminAsistenciasTests(VistasEstudianteTests):
+    """
+    Usa la misma base de VistasEstudianteTests: cursos c1 (profesorID 'uid_doc', con asistencia el
+    2026-03-02 de 1000001 presente y 2000002 ausente), c2 (sin asistencias), c3 con el subgrupo g1
+    (profesorID '9'). Aquí se agrega el documento 'person' del docente (id '9', profesorUID 'uid_doc')
+    para poder resolver su nombre, algo que las pruebas de estudiante no necesitan.
+    """
+    def montar(self, datos=None):
+        extra = {('person', '9'): {'type': 'Profesor', 'namePerson': 'DOC', 'profesorUID': 'uid_doc'}}
+        extra.update(datos or {})
+        super().montar(extra)
+
+    def como_admin(self):
+        self.como_persona('uid_admin', None, email=ADMIN)
+
+    def test_los_tres_endpoints_exigen_ser_admin(self):
+        self.montar()
+        self.como_persona('uid_eva', ESTUDIANTE)
+        self.assertEqual(self.client.get('/api/admin/asistencias/filtros/').status_code, 403)
+        self.assertEqual(self.client.get('/api/admin/asistencias/').status_code, 403)
+
+    def test_filtros_trae_cursos_y_docentes(self):
+        self.montar()
+        self.como_admin()
+        r = self.client.get('/api/admin/asistencias/filtros/').json()
+        self.assertEqual(sorted(c['id'] for c in r['cursos']), ['c1', 'c2', 'c3::g1'])
+        self.assertEqual(r['docentes'], [{'cedula': '9', 'nombre': 'DOC'}])
+        c1 = next(c for c in r['cursos'] if c['id'] == 'c1')
+        self.assertEqual(c1['nameCourse'], 'REDES')
+        self.assertEqual(c1['schedule'], [clase('Lunes', '07:00', '08:59')])   # trae el horario real, lo usa "Generar reporte"
+
+    def test_buscador_sin_filtros_trae_todo_el_sistema_con_el_docente_resuelto(self):
+        self.montar()
+        self.como_admin()
+        r = self.client.get('/api/admin/asistencias/').json()
+        self.assertEqual(r['totalGeneral'], 2)
+        self.assertEqual({f['estudiante'] for f in r['filas']}, {'1000001', '2000002'})
+        self.assertTrue(all(f['docente'] == 'DOC' and f['docenteId'] == '9' for f in r['filas']))
+        self.assertEqual(r['resumen']['presentes'], 1)
+        self.assertEqual(r['resumen']['ausentes'], 1)
+
+    def test_filtra_por_curso(self):
+        self.montar()
+        self.como_admin()
+        self.assertEqual(self.client.get('/api/admin/asistencias/?curso=c2').json()['totalGeneral'], 0)
+        self.assertEqual(self.client.get('/api/admin/asistencias/?curso=c1').json()['totalGeneral'], 2)
+
+    def test_filtra_por_docente_aunque_el_curso_guarde_el_uid_y_no_la_cedula(self):
+        # c1.profesorID es 'uid_doc' (el UID de sesión), pero el filtro admin usa la cédula ('9')
+        self.montar()
+        self.como_admin()
+        self.assertEqual(self.client.get('/api/admin/asistencias/?docente=9').json()['totalGeneral'], 2)
+        self.assertEqual(self.client.get('/api/admin/asistencias/?docente=otro').json()['totalGeneral'], 0)
+
+    def test_filtra_por_fecha_y_estado(self):
+        self.montar()
+        self.como_admin()
+        self.assertEqual(self.client.get('/api/admin/asistencias/?fecha=2026-03-02').json()['totalGeneral'], 2)
+        self.assertEqual(self.client.get('/api/admin/asistencias/?fecha=2026-01-01').json()['totalGeneral'], 0)
+        self.assertEqual(self.client.get('/api/admin/asistencias/?fecha=no-es-fecha').status_code, 400)
+        self.assertEqual(self.client.get('/api/admin/asistencias/?estado=Presente').json()['totalGeneral'], 1)
+        self.assertEqual(self.client.get('/api/admin/asistencias/?estado=Invalido').status_code, 400)
+
+    def test_filtra_por_texto_nombre_o_cedula(self):
+        self.montar()
+        self.como_admin()
+        self.assertEqual(self.client.get('/api/admin/asistencias/?q=EVA').json()['totalGeneral'], 1)
+        self.assertEqual(self.client.get('/api/admin/asistencias/?q=1000001').json()['totalGeneral'], 1)
+        self.assertEqual(self.client.get('/api/admin/asistencias/?q=nadie').json()['totalGeneral'], 0)
+
+    def test_admin_usa_el_mismo_reporte_pdf_excel_que_los_demas_roles(self):
+        # El admin no es dueño del curso, así que /api/asistencias/reporte/ (AsistenciaReporteView) debe
+        # dejarlo pasar igual y resolver el nombre del docente real, no el de quien pide el reporte.
+        self.montar()
+        self.como_admin()
+        r = self.client.get('/api/asistencias/reporte/', {'unidad': 'c1'})
+        self.assertEqual(r.status_code, 200)
+        datos = r.json()
+        self.assertEqual((datos['unidad']['docente'], datos['unidad']['docenteId']), ('DOC', '9'))
+        self.assertEqual({e['cedula'] for e in datos['estudiantes']}, {'1000001', '2000002'})
+
+        self.como_persona('uid_eva', ESTUDIANTE)
+        self.assertEqual(self.client.get('/api/asistencias/reporte/', {'unidad': 'c2'}).status_code, 403)  # sigue sin poder ver otro curso
+
+
+# ============================================
 # ASISTENCIAS POR PÁGINAS
 # ============================================
 from . import asistencia_pagina as ap

@@ -37,6 +37,8 @@ from .views import (
     AdminSolicitudAccionView,
     AdminAutorizadosView,
     AdminAutorizadoDetalleView,
+    AdminAsistenciasFiltrosView,
+    AdminAsistenciasView,
     # Health Check
     HealthCheck,
     EstudianteNombreView,
@@ -100,6 +102,8 @@ urlpatterns = [
     path("admin/solicitudes/<str:solicitud_uid>/<slug:accion>/", AdminSolicitudAccionView.as_view(), name="admin-solicitud-accion"),
     path("admin/autorizados/", AdminAutorizadosView.as_view(), name="admin-autorizados"),
     path("admin/autorizados/<str:email>/", AdminAutorizadoDetalleView.as_view(), name="admin-autorizado"),
+    path("admin/asistencias/filtros/", AdminAsistenciasFiltrosView.as_view(), name="admin-asistencias-filtros"),
+    path("admin/asistencias/", AdminAsistenciasView.as_view(), name="admin-asistencias"),
     path("horarios/clases/", HorarioClaseView.as_view(), name="horario-clase-create"),
     path("horarios/clases/<str:clase_id>/", HorarioClaseView.as_view(), name="horario-clase-detail"),
 ]
