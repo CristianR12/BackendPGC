@@ -1851,6 +1851,9 @@ class AdminAsistenciasTests(VistasEstudianteTests):
         c1 = next(c for c in r['cursos'] if c['id'] == 'c1')
         self.assertEqual(c1['nameCourse'], 'REDES')
         self.assertEqual(c1['schedule'], [clase('Lunes', '07:00', '08:59')])   # trae el horario real, lo usa "Generar reporte"
+        # Cada curso trae ya resuelta la cédula de su docente, para que el front cruce curso <-> docente
+        self.assertEqual(c1['docenteId'], '9')
+        self.assertEqual(next(c for c in r['cursos'] if c['id'] == 'c3::g1')['docenteId'], '9')
 
     def test_buscador_sin_filtros_trae_todo_el_sistema_con_el_docente_resuelto(self):
         self.montar()

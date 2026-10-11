@@ -3428,7 +3428,9 @@ class AdminAsistenciasFiltrosView(APIView):
     """
     GET /api/admin/asistencias/filtros/  Para el buscador: la lista de docentes, y las unidades (cursos y
     subgrupos) con la misma forma que GET /api/horarios/ (id, nameCourse, group, schedule...), para que el
-    front pueda alimentar con ellas el mismo "Generar reporte" que usan los demás roles.
+    front pueda alimentar con ellas el mismo "Generar reporte" que usan los demás roles. Cada curso trae
+    además 'docenteId' (la cédula de su profesor, ya resuelta) para que el front pueda cruzar los dos
+    selectores: al elegir un curso, mostrar solo su docente, y al elegir un docente, solo sus cursos.
     """
 
     def get(self, request):
@@ -3438,6 +3440,8 @@ class AdminAsistenciasFiltrosView(APIView):
         try:
             docentes_mapa = _mapa_docentes()
             cursos = sorted(listar_todas_unidades(), key=lambda u: ((u.get('nameCourse') or '').lower(), str(u.get('group') or '')))
+            for u in cursos:
+                u['docenteId'] = docentes_mapa.get(u.get('profesorID'), {}).get('cedula', '')
             docentes = sorted({(v['cedula'], v['nombre']) for v in docentes_mapa.values()}, key=lambda d: d[1].lower())
             return Response({
                 "cursos": cursos,
