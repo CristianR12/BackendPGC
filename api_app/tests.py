@@ -869,7 +869,14 @@ class VistasCursosTests(MontajeVistas):
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.json()['resultado'], {'inscritos': 2, 'creados': 1, 'quitados': 0})
         batch = self.db.batch.return_value
-        self.assertEqual(batch.set.call_args[0][1], {'namePerson': 'UNO', 'type': 'Estudiante', 'courses': ['c1']})
+        sets = [c[0][1] for c in batch.set.call_args_list]
+        self.assertIn({'namePerson': 'UNO', 'type': 'Estudiante', 'courses': ['c1']}, sets)
+        fila_legal = next(d for d in sets if d.get('evento') == 'creacion')                            # su primera fila legal
+        self.assertEqual(fila_legal['biometrico'], False)
+        self.assertEqual(fila_legal['datosPersonales'], False)
+        self.assertEqual(fila_legal['terminos'], False)
+        self.assertEqual(fila_legal['version'], lg.VERSION)
+        self.assertNotIn('uid', fila_legal)
         llamadas = [c[0][1] for c in batch.update.call_args_list]
         self.assertIn({'courses': ('ArrayUnion', ['c1'])}, llamadas)                                  # persona existente
         self.assertIn({'estudianteID': ('ArrayUnion', ['1111111111', '2222222222'])}, llamadas)       # el curso
@@ -925,7 +932,8 @@ class VistasCursosTests(MontajeVistas):
         self.assertEqual(r.status_code, 200)
         destino = [c[0][0] for c in self.db.batch.return_value.update.call_args_list]
         self.assertIn(grupo, destino)                                                            # actualizó el SUBGRUPO
-        self.assertEqual(self.db.batch.return_value.set.call_args[0][1]['courses'], ['b'])      # y la persona guarda el id del CURSO principal
+        persona_creada = next(c[0][1] for c in self.db.batch.return_value.set.call_args_list if 'courses' in c[0][1])
+        self.assertEqual(persona_creada['courses'], ['b'])                                       # y la persona guarda el id del CURSO principal
 
 
 class VistasPerfilTests(MontajeVistas):

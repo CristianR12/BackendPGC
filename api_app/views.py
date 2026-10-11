@@ -2527,18 +2527,27 @@ def _cedulas_en_otros_grupos(curso_id, grupo_id):
 
 def _aplicar_inscripcion(ref, unidad_id, plan):
     """
-    Escribe el plan: crea personas nuevas, las agrega al curso y quita a quien corresponda.
-    Primero se agrega (un lote) y luego se quita (otro lote): cada lote es atómico.
+    Escribe el plan: crea personas nuevas (con la primera fila de su historial legal), las
+    agrega al curso y quita a quien corresponda. Primero se agrega (un lote) y luego se quita
+    (otro lote): cada lote es atómico.
     """
     curso_id, grupo_id = separar_id_unidad(unidad_id)
 
     a_inscribir = [e['cedula'] for e in plan['estudiantes'] if e['accion'] in ('crear', 'inscribir')]
     if a_inscribir:
+        fecha = _ahora_iso()
         batch = db.batch()
         for e in plan['estudiantes']:
             pref = db.collection("person").document(e['cedula'])
             if e['accion'] == 'crear':
                 batch.set(pref, {"namePerson": e['nombre'], "type": "Estudiante", "courses": [curso_id]})
+                # Primera fila de su historial legal: todavía no ha aceptado nada. El kiosco de
+                # reconocimiento facial la lee para saber que existe la cédula, y la copia y la
+                # actualiza (evento, biometrico, fecha) el día que el estudiante sí se enrola.
+                batch.set(pref.collection("aceptacionesLegales").document(), {
+                    "evento": "creacion", "biometrico": False, "datosPersonales": False,
+                    "terminos": False, "version": legal.VERSION, "fecha": fecha,
+                })
             elif e['accion'] == 'inscribir':
                 batch.update(pref, {"courses": firestore.ArrayUnion([curso_id])})
         batch.update(ref, {"estudianteID": firestore.ArrayUnion(a_inscribir)})
