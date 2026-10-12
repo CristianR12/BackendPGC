@@ -1168,9 +1168,15 @@ class FakeBatch:
     def update(self, ref, data):
         self.ops.append(('update', ref, data))
 
+    def delete(self, ref):
+        self.ops.append(('delete', ref, None))
+
     def commit(self):
         for tipo, ref, data in self.ops:
-            getattr(ref, tipo)(data)
+            if tipo == 'delete':
+                ref.delete()
+            else:
+                getattr(ref, tipo)(data)
 
 
 class FakeFirestore:
@@ -2493,6 +2499,21 @@ class VistasLegalTests(VistasEstudianteTests):
         eventos = sorted(v['evento'] for (c, _), v in self.fs.datos.items() if c.endswith('/aceptacionesLegales'))
         self.assertEqual(eventos, ['aceptacion', 'biometrico_otorgado', 'biometrico_revocado'])
         self.assertEqual(self.client.post('/api/legal/biometrico/', {'autoriza': 'si'}, format='json').status_code, 400)
+
+    def test_revocar_biometria_borra_el_vector_facial(self):
+        # El reconocimiento facial deja el embedding en person/{cedula}/vector/{modelo}; al revocar,
+        # ese vector debe desaparecer (otorgar no lo toca, solo lo crea el otro módulo).
+        self.montar({('person/1000001/vector', 'sface'): {'modelo': 'sface-2021dec', 'vector': 'xxx'}})
+        self.como_persona('uid_eva', ESTUDIANTE)
+        self.client.post('/api/legal/aceptacion/', {'terminos': True, 'datosPersonales': True}, format='json')
+        persona = {**ESTUDIANTE, **self.fs.datos[('person', '1000001')]}
+        self.como_persona('uid_eva', persona)
+        self.assertEqual(self.client.post('/api/legal/biometrico/', {'autoriza': True}, format='json').status_code, 200)
+        self.assertIn(('person/1000001/vector', 'sface'), self.fs.datos)
+        persona = {**ESTUDIANTE, **self.fs.datos[('person', '1000001')]}
+        self.como_persona('uid_eva', persona)
+        self.assertEqual(self.client.post('/api/legal/biometrico/', {'autoriza': False}, format='json').status_code, 200)
+        self.assertNotIn(('person/1000001/vector', 'sface'), self.fs.datos)
 
     def test_biometria_exige_haber_aceptado_la_version_vigente(self):
         self.montar()

@@ -3121,11 +3121,19 @@ class LegalBiometricoView(APIView):
                 return Response({"aceptacion": aceptacion}, status=status.HTTP_200_OK)
             aceptacion['biometrico'] = autoriza
             ref_persona = db.collection("person").document(persona['id'])
-            ref_persona.update({"aceptacionLegal": aceptacion})
-            ref_persona.collection("aceptacionesLegales").document().set({
+            batch = db.batch()
+            batch.update(ref_persona, {"aceptacionLegal": aceptacion})
+            batch.set(ref_persona.collection("aceptacionesLegales").document(), {
                 **aceptacion, "evento": "biometrico_otorgado" if autoriza else "biometrico_revocado",
                 "fecha": _ahora_iso(), "uid": user_uid,
             })
+            if not autoriza:
+                # Al revocar, se borra también el vector biométrico que haya generado el
+                # reconocimiento facial (person/{cedula}/vector/{modelo}); sin esto, el embedding
+                # seguía existiendo en Firestore aunque la persona ya no autorizara su uso.
+                for v in ref_persona.collection("vector").stream():
+                    batch.delete(v.reference)
+            batch.commit()
             return Response({"aceptacion": aceptacion}, status=status.HTTP_200_OK)
         except Exception as e:
             logger.error(f"LegalBiometricoView: {e}")
